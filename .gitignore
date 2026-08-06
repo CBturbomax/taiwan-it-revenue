@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# 데이터는 커밋하지 않는다. 코드와 설정만 올린다.
+# data.db는 17.6MB이고 매일 바뀐다 -- 커밋하면 1년에 6GB가 쌓이고
+# git은 바이너리를 델타 압축하지 못해 저장소가 되돌릴 수 없이 부풀어 오른다.
+# 필요하면 누구든 `run.bat backfill`로 원본에서 다시 만들 수 있다.
+# ---------------------------------------------------------------------------
+data.db
+data.db-wal
+data.db-shm
+*.db
+*.sqlite
+*.sqlite3
+
+# 원본 HTML 캐시 (백필 시 재생성됨)
+raw_cache/
+log/
+*.log
+
+# 빌드 산출물. main이 아니라 gh-pages 브랜치로만 배포한다.
+dashboard.html
+dashboard_all.html
+
+# 개발 중 쓴 일회성 조사 스크립트
+probe*.py
+verify*.py
+diag.py
+disc_test.py
+mom_check.py
+newcodes.py
+bom_check.py
+modalcheck.py
+cands.py
+top150.py
+industries.py
+cloud.py
+cumdiag*.py
+check*.py
+enc.py
+gen_groups.py
+
+# 파이썬
+*.pyc
+__pycache__/
+.venv/
+venv/
+
+# 에디터 / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
