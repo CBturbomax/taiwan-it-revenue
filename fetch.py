@@ -77,6 +77,10 @@ UA = {
 # so they win over the JSON APIs when both describe the same (code, ym).
 SOURCE_PRIORITY = {"mops": 3, "twse-api": 2, "tpex-api": 2}
 
+# 발표일(disclosure)을 기록할지. 일상 갱신에서만 켠다 -- main()이 정한다.
+# 백필이나 명시적 기간 지정은 이력 적재이므로 관측 시각에 의미가 없다.
+RECORD_DISCLOSURE = True
+
 RE_INDUSTRY = re.compile(r"產業別[:：]\s*(.+)")
 RE_CODE = re.compile(r"^[0-9]{4,6}$")
 RE_PUBDATE = re.compile(r"出表日期[:：]\s*(\d{2,3})/(\d{1,2})/(\d{1,2})")
@@ -696,11 +700,16 @@ def upsert(conn: sqlite3.Connection, rows: list[dict]) -> dict:
         if old is None:
             stats["new"] += 1
             writable.append(r)
-            # first time this (code, ym) has ever entered the DB
-            first_seen.append((r["code"], r["ym"],
-                               local.date().isoformat(),
-                               local.isoformat(timespec="seconds"),
-                               "mops" if (r["source"] or "").startswith("mops") else "api"))
+            # "처음 들어왔다"가 "방금 발표됐다"를 뜻하는 것은 일상 폴링일 때뿐이다.
+            # 백필은 과거 이력을 적재하는 작업이라 전 종목·전 개월이 한꺼번에
+            # 신규로 잡히고, 그대로 기록하면 4년치가 전부 오늘 발표된 것으로
+            # 둔갑한다 (빈 DB에서 백필한 서버에서 실제로 92,875건이 그렇게 됐다).
+            if RECORD_DISCLOSURE:
+                first_seen.append((r["code"], r["ym"],
+                                   local.date().isoformat(),
+                                   local.isoformat(timespec="seconds"),
+                                   "mops" if (r["source"] or "").startswith("mops")
+                                   else "api"))
             continue
         if _rank(r) < _rank(old):
             stats["stale"] += 1          # older snapshot than what we hold
@@ -917,8 +926,13 @@ def main(argv=None) -> int:
         print(f"error: --from {start} is after --to {end}", file=sys.stderr)
         return 2
 
+    # 발표일은 "진행 중인 달을 반복해서 들여다보다가 새로 뜬 것"에만 의미가 있다.
+    global RECORD_DISCLOSURE
+    RECORD_DISCLOSURE = not (args.backfill or args.ym_from or args.ym_to)
+
     months = month_range(start, end)
     print(f"fetch.py  db={args.db}")
+    print(f"발표일 기록: {'예 (일상 갱신)' if RECORD_DISCLOSURE else '아니오 (이력 적재)'}")
     print(f"target months: {start[0]}-{start[1]:02d} .. {end[0]}-{end[1]:02d} "
           f"({len(months)} months)")
 
