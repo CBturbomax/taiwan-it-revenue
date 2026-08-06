@@ -765,8 +765,13 @@ def report_master(conn: sqlite3.Connection):
         SELECT COUNT(*) n, SUM(m.name_en IS NOT NULL) e
         FROM (SELECT DISTINCT code FROM revenue) r
         LEFT JOIN company m ON m.code = r.code""").fetchone()
-    print(f"  revenue universe: {row['n']} codes, {row['e'] or 0} matched to an "
-          f"English abbr ({(row['e'] or 0) / row['n'] * 100:.1f}%)")
+    # On a fresh database --master runs before any revenue exists, so this
+    # denominator is legitimately zero. It never happened locally because
+    # data.db always already had rows.
+    n_uni, n_en = row["n"] or 0, row["e"] or 0
+    pctstr = f"{n_en / n_uni * 100:.1f}%" if n_uni else "revenue 테이블이 아직 비어 있음"
+    print(f"  revenue universe: {n_uni} codes, {n_en} matched to an "
+          f"English abbr ({pctstr})")
     unmatched = [r["code"] for r in c.execute(
         "SELECT r.code FROM (SELECT DISTINCT code FROM revenue) r "
         "LEFT JOIN company m ON m.code=r.code WHERE m.name_en IS NULL LIMIT 12")]
