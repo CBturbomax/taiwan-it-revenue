@@ -62,11 +62,14 @@ OUT_PATH = os.path.join(HERE, "dashboard.html")
 # filed sits far below the line and never contaminates the body of the report.
 COMPLETE_RATIO = 0.7
 
-# 월별 숫자 라벨 크기. viewBox가 540 고정이고 1열 전체폭에서 약 3배로 확대되므로
-# CSS 11px로 보이려면 user unit 기준 3.7이어야 한다.
+# 월별 숫자 라벨 크기. 3열 그리드에서 SVG는 약 497px로 그려지고 viewBox는 540
+# 고정이라 배율이 약 0.92다. 화면에서 9px로 보이려면 user unit 기준 9.8이어야 한다.
 # (CSS 문자열이 이 파일 위쪽에서 f-string으로 평가되므로 여기 있어야 한다)
-LBL_H = 4.6        # 라벨 박스 높이 (user unit)
-LBL_FS = 3.7       # 1열 전체폭에서 약 11 CSS px
+LBL_FS = 9.8       # 3열에서 약 9 CSS px
+LBL_H = 12.0       # 라벨 박스 높이 (user unit)
+# 한 달 폭(14.3)보다 라벨이 넓어 이웃과 겹친다. 홀수달을 위아래로 어긋나게 놓아
+# 두 줄로 나누면 각 줄의 간격이 28.7이 되어 서로 부딪히지 않는다.
+LBL_ZIG = 13.0
 
 BG = "#0f1419"
 FG = "#ffffff"
@@ -613,10 +616,10 @@ body.hide-mom svg.ch .momline, body.hide-mom svg.ch .momdot {{ display:none; }}
 .momtog {{ font-size:18px; margin-bottom:6px; }}
 .hintw {{ font-size:16px; color:var(--mute); }}
 
-/* month labels: only ever visible in the one-column layout */
+/* month labels -- grid stays three columns whether they are on or off */
 svg.ch .lbl {{ display:none; }}
-body.wide-charts svg.ch .lbl {{ display:block; }}
-body.wide-charts.hide-mom svg.ch .lbl.momlbl {{ display:none; }}
+body.show-nums svg.ch .lbl {{ display:block; }}
+body.show-nums.hide-mom svg.ch .lbl.momlbl {{ display:none; }}
 svg.ch .lbg {{ fill:rgba(10,15,20,.82); rx:1.2; }}
 /* 색은 반드시 CSS로 준다. SVG의 fill 표현 속성은 `svg.ch text {{fill:...}}`
    보다 우선순위가 낮아, JS로 fill 속성을 걸면 전부 흰색으로 덮인다. */
@@ -625,8 +628,6 @@ svg.ch .lbt {{
   letter-spacing:0; fill:{ACCENT3};
 }}
 svg.ch .lbl.momlbl .lbt {{ fill:{ACCENT}; }}
-/* one column so 36 months get ~46px each and the numbers fit */
-body.wide-charts .grid3 {{ grid-template-columns:minmax(0,1fr); }}
 /* clickable chart card */
 .cbox {{ cursor:pointer; transition:border-color .12s, transform .12s; }}
 .cbox:hover {{ border-color:var(--a1); transform:translateY(-2px); }}
@@ -1248,9 +1249,9 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
     # 보이려면 user unit 기준 3.7이어야 한다. 3열일 때는 읽을 수 없는 크기지만
     # 라벨은 전체폭 모드에서만 켜지므로 상관없다.
     if LABEL_MODE == "svg":
-        out.append(label_group("ly", yoys, lambda v: line_y(v) - 3.0, slot, LINE_COL))
-        out.append(label_group("lm", moms, lambda v: mom_y(v) + 6.2, slot, MOM_COL,
-                               cls_extra=" momlbl"))
+        out.append(label_group("ly", yoys, line_y, slot, LINE_COL, dir_=-1))
+        out.append(label_group("lm", moms, mom_y, slot, MOM_COL,
+                               cls_extra=" momlbl", dir_=1))
     else:
         # 방식 B: 좌표계만 넘기고 라벨은 클릭 시 JS가 그린다. SERIES 데이터가
         # 이미 모달용으로 실려 있어 추가 용량이 사실상 없다.
@@ -1267,29 +1268,27 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
 
 
 def label_group(cls: str, vals, y_of, slot: float, color: str,
-                cls_extra: str = "") -> str:
-    """겹치지 않는 만큼만 라벨을 찍는다. 기준월은 무조건 표시."""
-    n = len(vals)
+                cls_extra: str = "", dir_: int = -1) -> str:
+    """모든 달의 라벨을 찍는다. 홀수달은 LBL_ZIG 만큼 어긋나게 두 줄로 나눈다.
+
+    JS 경로(drawLabels)와 배치 규칙이 같아야 --label-mode 비교가 의미를 갖는다.
+    """
     placed: list[str] = []
-    last_right = -1e9
-    # 오른쪽(최신)부터 배치해야 기준월이 확실히 살아남는다
-    for i in range(n - 1, -1, -1):
-        v = vals[i]
+    for i, v in enumerate(vals):
         if v is None:
             continue
         txt = f"{v:+.0f}"
-        w = len(txt) * LBL_FS * 0.62 + 2.2
+        w = len(txt) * LBL_FS * 0.62 + 3
         cx = PL + i * slot + slot / 2
-        x0, x1 = cx - w / 2, cx + w / 2
-        if i != n - 1 and x1 > last_right - 0.8:
-            continue                      # 직전(오른쪽) 라벨과 겹침 -> 건너뜀
-        last_right = x0
-        y = y_of(v)
+        y = y_of(v) + (-2 if dir_ < 0 else LBL_H)
+        if i % 2 == 1:
+            y += dir_ * LBL_ZIG
+        y = max(56.0, min(264.0, y))
         placed.append(
-            f'<rect class="lbg" x="{x0:.1f}" y="{y - LBL_H + 1.1:.1f}" '
+            f'<rect class="lbg" x="{cx - w / 2:.1f}" y="{y - LBL_H + 1.1:.1f}" '
             f'width="{w:.1f}" height="{LBL_H:.1f}"/>'
-            f'<text class="lbt" x="{cx:.1f}" y="{y:.1f}" fill="{color}">{txt}</text>')
-    return f'<g class="lbl{cls_extra}">{"".join(reversed(placed))}</g>'
+            f'<text class="lbt" x="{cx:.1f}" y="{y:.1f}">{txt}</text>')
+    return f'<g class="lbl{cls_extra}">{"".join(placed)}</g>'
 
 
 def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, sec=6):
@@ -1379,8 +1378,6 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, s
             'MoM 선 표시</label>'
             '<label class="chk momtog"><input type="checkbox" id="numToggle">'
             '숫자 표시</label>'
-            '<span class="hintw">숫자를 켜면 1열 전체폭으로 바뀝니다 &mdash; '
-            '3열에서는 한 달이 13px라 숫자가 안 들어갑니다</span>'
             '</div>']
     return "\n".join(head + body)
 
@@ -1920,7 +1917,8 @@ function wireMomToggle(){
 // Month labels. Drawn on demand from SERIES (already shipped for the modal) plus
 // the per-chart scale in data-sc, so the axes match the Python-drawn lines
 // exactly instead of being re-derived and drifting.
-var LBL_H = 4.6, LBL_FS = 3.7, NS = 'http://www.w3.org/2000/svg';
+var LBL_H = __LBL_H__, LBL_FS = __LBL_FS__, LBL_ZIG = __LBL_ZIG__;
+var NS = 'http://www.w3.org/2000/svg';
 function lblPct(a, b){ if(a==null||b==null||b<=0) return null; return (a/b-1)*100; }
 function drawLabels(svg, nMonths){
   if (svg.dataset.lbl === '1') return;          // already built
@@ -1943,21 +1941,24 @@ function drawLabels(svg, nMonths){
     var c = Math.max(-60, Math.min(60, v));
     return Math.max(63, Math.min(245, zy - (c/60)*half));
   }
-  function group(vals, yOf, extra){
+  // dir -1: 선 위쪽, +1: 선 아래쪽.
+  // 모든 달을 다 찍는다. 라벨 폭(약 21)이 한 달 폭(14.3)보다 넓어 겹치므로
+  // 홀수달을 LBL_ZIG 만큼 어긋나게 놓아 두 줄로 나눈다.
+  function group(vals, yOf, extra, dir){
     var g = document.createElementNS(NS,'g');
     g.setAttribute('class','lbl'+(extra||''));
-    var lastLeft = 1e9, out = [];
-    for (var i = vals.length-1; i >= 0; i--){
+    var out = [];
+    for (var i = 0; i < vals.length; i++){
       var v = vals[i]; if (v == null) continue;
       var txt = (v>0?'+':'') + Math.round(v);
-      var w = txt.length*LBL_FS*0.62 + 2.2;
-      var cx = PL + i*slot + slot/2, x0 = cx-w/2, x1 = cx+w/2;
-      if (i !== vals.length-1 && x1 > lastLeft - 0.8) continue;
-      lastLeft = x0;
-      var y = yOf(v);
-      out.push([x0, y, w, cx, txt]);
+      var w = txt.length*LBL_FS*0.62 + 3;
+      var cx = PL + i*slot + slot/2;
+      var y = yOf(v) + (dir < 0 ? -2 : LBL_H);
+      if (i % 2 === 1) y += dir * LBL_ZIG;
+      y = Math.max(56, Math.min(264, y));
+      out.push([cx - w/2, y, w, cx, txt]);
     }
-    out.reverse().forEach(function(o){
+    out.forEach(function(o){
       var r = document.createElementNS(NS,'rect');
       r.setAttribute('class','lbg'); r.setAttribute('x',o[0].toFixed(1));
       r.setAttribute('y',(o[1]-LBL_H+1.1).toFixed(1));
@@ -1970,8 +1971,8 @@ function drawLabels(svg, nMonths){
     });
     return g;
   }
-  svg.appendChild(group(yoy, yLine));
-  svg.appendChild(group(mom, yMom, ' momlbl'));
+  svg.appendChild(group(yoy, yLine, '', -1));
+  svg.appendChild(group(mom, yMom, ' momlbl', 1));
   svg.dataset.lbl = '1';
 }
 function wireNumToggle(nMonths){
@@ -1979,8 +1980,7 @@ function wireNumToggle(nMonths){
   if (!cb) return;
   function run(){
     var on = cb.checked;
-    // one column, because "+68" cannot fit in a 13px slot at three columns
-    document.body.classList.toggle('wide-charts', on);
+    document.body.classList.toggle('show-nums', on);   // 그리드는 3열 그대로
     if (on) document.querySelectorAll('svg.ch').forEach(function(s){
       drawLabels(s, nMonths);
     });
@@ -2077,7 +2077,7 @@ YoY·MoM·누계YoY는 build 시점에 원본 절대금액에서 매번 재계�
 <script>
 {meta["payload"]}
 {JS}
-{MODAL_JS}
+{MODAL_JS.replace("__LBL_H__", str(LBL_H)).replace("__LBL_FS__", str(LBL_FS)).replace("__LBL_ZIG__", str(LBL_ZIG))}
 wire('tAll'); wire('tPend');
 wireModal(); wireMomToggle(); wireHeatTabs();
 wireNumToggle({meta["n_months"]});
