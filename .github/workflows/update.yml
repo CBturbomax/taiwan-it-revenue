@@ -57,10 +57,39 @@ jobs:
                   print(f"OK {len(r.read()):>9}B  {url}")
           PY
 
-      - name: Backfill (only when the cache was empty)
-        if: steps.dbcache.outputs.cache-matched-key == ''
+      # A cache hit is not proof the database is usable. The very first run
+      # failed *after* --master had written the company table, and the save step
+      # (then `if: always()`) cached that 59KB stub. The next run saw a cache
+      # hit, skipped the backfill, fetched only the last 3 months and published
+      # a dashboard with 3 months of history instead of 48.
+      # So: inspect what came back, and rebuild whenever it is not deep enough.
+      - name: Validate restored database
+        id: dbcheck
         run: |
-          echo "no cached data.db -- rebuilding from source"
+          months=0
+          if [ -f data.db ]; then
+            months=$(python - <<'PY'
+          import sqlite3
+          try:
+              c = sqlite3.connect("data.db")
+              print(c.execute("SELECT COUNT(DISTINCT ym) FROM revenue").fetchone()[0])
+          except Exception:
+              print(0)
+          PY
+          )
+          fi
+          echo "restored data.db holds $months month(s)"
+          # charts need 36 and YoY needs 12 more; anything shallower is broken
+          if [ "$months" -ge 40 ]; then
+            echo "need_backfill=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "need_backfill=1" >> "$GITHUB_OUTPUT"
+            echo "::warning::data.db has only $months months -- rebuilding from source"
+          fi
+
+      - name: Backfill
+        if: steps.dbcheck.outputs.need_backfill == '1'
+        run: |
           python fetch.py --master
           python fetch.py --backfill
 
@@ -78,13 +107,43 @@ jobs:
           python build.py --modal-all
           ls -lh dashboard.html
 
+      # 마지막 방어선: 배포하기 전에 결과물이 말이 되는지 확인한다.
+      # 한 번 잘못 올리면 팀원들은 그게 틀렸다는 걸 알 방법이 없다.
+      - name: Sanity-check before publishing
+        run: |
+          python - <<'PY'
+          import os, re, sqlite3, sys
+          fail = []
+          size = os.path.getsize("dashboard.html")
+          if size < 1_500_000:
+              fail.append(f"dashboard.html이 {size:,} bytes로 너무 작음")
+          html = open("dashboard.html", encoding="utf-8").read()
+          n_charts = html.count('class="cbox"')
+          if n_charts < 100:
+              fail.append(f"차트가 {n_charts}개뿐 (정상 113)")
+          c = sqlite3.connect("data.db")
+          months = c.execute("SELECT COUNT(DISTINCT ym) FROM revenue").fetchone()[0]
+          if months < 40:
+              fail.append(f"data.db에 {months}개월치뿐")
+          rows = c.execute("SELECT COUNT(*) FROM revenue").fetchone()[0]
+          print(f"dashboard {size:,} bytes, 차트 {n_charts}개, "
+                f"data.db {months}개월 {rows:,}행")
+          if fail:
+              print("::error::배포 중단 -- " + " / ".join(fail))
+              sys.exit(1)
+          print("sanity OK")
+          PY
+
       - name: Check for leftover hanja
         run: python audit_cjk.py || true
 
       # 새 키로 저장하고 restore-keys 접두사로 최신 것을 되찾는다.
       # 캐시 항목은 불변이라 같은 키에 덮어쓸 수 없다.
+      #
+      # `if: always()` 를 쓰면 안 된다. 실패한 실행의 반쪽짜리 DB가 캐시에 남아
+      # 다음 실행을 오염시킨다 -- 실제로 그렇게 3개월치 대시보드가 배포됐다.
+      # 기본값(success)이라 앞 단계가 모두 성공했을 때만 저장한다.
       - name: Save data.db
-        if: always()
         uses: actions/cache/save@v4
         with:
           path: data.db
