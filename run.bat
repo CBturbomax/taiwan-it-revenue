@@ -19,6 +19,20 @@ REM ---------------------------------------------------------------------------
 setlocal
 cd /d "%~dp0"
 
+REM ASCII only -- see the note at the top of this file.
+echo ============================================================
+echo  MANUAL RUN  /  su-dong sil-haeng
+echo.
+echo  GitHub Actions already refreshes the dashboard 4x a day.
+echo  Running it here is fine when you want an update right now.
+echo.
+echo  CAUTION: this PC has its own data.db, so the disclosure
+echo  dates (balpyoil / first_seen) recorded here will NOT match
+echo  the server's. The server is the source of truth for those.
+echo  Everything else - revenue, YoY, MoM - is identical.
+echo ============================================================
+echo.
+
 set PY=python
 where %PY% >nul 2>nul || (echo [ERROR] python not found on PATH & goto :failed)
 
