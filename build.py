@@ -47,6 +47,12 @@ try:
     from names_auto import NAME_AUTO
 except ImportError:
     NAME_AUTO = {}
+# h1 옆 아이콘. 별도 파일로 두면 gh-pages에 index.html만 올라가 깨지므로
+# data URI로 인라인한다. 없으면 이모지로 대체한다.
+try:
+    from logo import LOGO_DATA_URI
+except ImportError:
+    LOGO_DATA_URI = ""
 
 DB_PATH = os.path.join(HERE, "data.db")
 OUT_PATH = os.path.join(HERE, "dashboard.html")
@@ -55,6 +61,12 @@ OUT_PATH = os.path.join(HERE, "dashboard.html")
 # busiest month's row count. Filings are due by the 10th, so the month being
 # filed sits far below the line and never contaminates the body of the report.
 COMPLETE_RATIO = 0.7
+
+# 월별 숫자 라벨 크기. viewBox가 540 고정이고 1열 전체폭에서 약 3배로 확대되므로
+# CSS 11px로 보이려면 user unit 기준 3.7이어야 한다.
+# (CSS 문자열이 이 파일 위쪽에서 f-string으로 평가되므로 여기 있어야 한다)
+LBL_H = 4.6        # 라벨 박스 높이 (user unit)
+LBL_FS = 3.7       # 1열 전체폭에서 약 11 CSS px
 
 BG = "#0f1419"
 FG = "#ffffff"
@@ -464,6 +476,11 @@ body {{
 }}
 .topline b {{ color:var(--fg); }}
 h1 {{ font-size:38px; font-weight:800; margin:0 0 6px; letter-spacing:-.5px; }}
+.cbmark {{
+  height:1.1em; width:auto; margin-left:.28em; vertical-align:-0.18em;
+  border-radius:6px;
+}}
+.cbmark-e {{ margin-left:.28em; font-size:.92em; vertical-align:-0.02em; }}
 h2 {{
   font-size:26px; font-weight:700; margin:52px 0 14px;
   padding-left:14px; border-left:6px solid var(--a3);
@@ -594,6 +611,22 @@ svg.ch .cmom {{ fill:{ACCENT}; }}    /* 헤더 숫자를 선 색과 맞춘다 */
 svg.ch .cyoy {{ fill:{ACCENT3}; }}
 body.hide-mom svg.ch .momline, body.hide-mom svg.ch .momdot {{ display:none; }}
 .momtog {{ font-size:18px; margin-bottom:6px; }}
+.hintw {{ font-size:16px; color:var(--mute); }}
+
+/* month labels: only ever visible in the one-column layout */
+svg.ch .lbl {{ display:none; }}
+body.wide-charts svg.ch .lbl {{ display:block; }}
+body.wide-charts.hide-mom svg.ch .lbl.momlbl {{ display:none; }}
+svg.ch .lbg {{ fill:rgba(10,15,20,.82); rx:1.2; }}
+/* 색은 반드시 CSS로 준다. SVG의 fill 표현 속성은 `svg.ch text {{fill:...}}`
+   보다 우선순위가 낮아, JS로 fill 속성을 걸면 전부 흰색으로 덮인다. */
+svg.ch .lbt {{
+  font-size:{LBL_FS}px; font-weight:700; text-anchor:middle;
+  letter-spacing:0; fill:{ACCENT3};
+}}
+svg.ch .lbl.momlbl .lbt {{ fill:{ACCENT}; }}
+/* one column so 36 months get ~46px each and the numbers fit */
+body.wide-charts .grid3 {{ grid-template-columns:minmax(0,1fr); }}
 /* clickable chart card */
 .cbox {{ cursor:pointer; transition:border-color .12s, transform .12s; }}
 .cbox:hover {{ border-color:var(--a1); transform:translateY(-2px); }}
@@ -1065,6 +1098,11 @@ MOM_COL = ACCENT               # #FFCB05 line    = MoM%
 MOM_CLIP = 60.0                # MoM 스케일은 ±60%에서 클리핑
 MOM_SPAN = 0.40                # ±MOM_CLIP 이 플롯 높이의 이 비율만큼 차지
 
+# 월별 숫자 라벨을 어디서 만들 것인가. --label-mode 로 바뀐다.
+#   "svg" -- 차트마다 미리 그려 넣고 CSS로 숨긴다 (단순, 용량 큼)
+#   "js"  -- 좌표계만 싣고 토글할 때 JS가 그린다 (모달용 SERIES 재사용, 용량 0)
+LABEL_MODE = "js"
+
 
 def months_axis(ref_ym: str, n: int) -> list[str]:
     return [shift_ym(ref_ym, -(n - 1 - i)) for i in range(n)]
@@ -1205,8 +1243,53 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
                    f'class="ct" text-anchor="middle">{ym[2:4]}/{ym[5:7]}</text>')
     out.append(f'<text x="{PR}" y="{PB + 24}" class="ct" text-anchor="end">'
                f'{axis[-1][2:4]}/{axis[-1][5:7]}</text>')
+    # --- 월별 숫자 라벨 -----------------------------------------------------
+    # viewBox는 540 고정이고 1열 전체폭에서 약 3배로 확대되므로, CSS 11px로
+    # 보이려면 user unit 기준 3.7이어야 한다. 3열일 때는 읽을 수 없는 크기지만
+    # 라벨은 전체폭 모드에서만 켜지므로 상관없다.
+    if LABEL_MODE == "svg":
+        out.append(label_group("ly", yoys, lambda v: line_y(v) - 3.0, slot, LINE_COL))
+        out.append(label_group("lm", moms, lambda v: mom_y(v) + 6.2, slot, MOM_COL,
+                               cls_extra=" momlbl"))
+    else:
+        # 방식 B: 좌표계만 넘기고 라벨은 클릭 시 JS가 그린다. SERIES 데이터가
+        # 이미 모달용으로 실려 있어 추가 용량이 사실상 없다.
+        out.append("")
+
     out.append("</svg>")
-    return "".join(out)
+    svg = "".join(out)
+    if LABEL_MODE == "js":
+        # JS가 파이썬과 똑같은 축을 재현하도록 스케일 파라미터를 실어 보낸다.
+        # 축 계산을 JS에 복제하면 선과 라벨이 어긋나기 시작한다.
+        sc = f"{PL:.1f},{slot:.4f},{rev_max},{lo:.4f},{hi:.4f},{zy:.2f},{half:.2f}"
+        svg = svg.replace('<svg viewBox', f'<svg data-sc="{sc}" viewBox', 1)
+    return svg
+
+
+def label_group(cls: str, vals, y_of, slot: float, color: str,
+                cls_extra: str = "") -> str:
+    """겹치지 않는 만큼만 라벨을 찍는다. 기준월은 무조건 표시."""
+    n = len(vals)
+    placed: list[str] = []
+    last_right = -1e9
+    # 오른쪽(최신)부터 배치해야 기준월이 확실히 살아남는다
+    for i in range(n - 1, -1, -1):
+        v = vals[i]
+        if v is None:
+            continue
+        txt = f"{v:+.0f}"
+        w = len(txt) * LBL_FS * 0.62 + 2.2
+        cx = PL + i * slot + slot / 2
+        x0, x1 = cx - w / 2, cx + w / 2
+        if i != n - 1 and x1 > last_right - 0.8:
+            continue                      # 직전(오른쪽) 라벨과 겹침 -> 건너뜀
+        last_right = x0
+        y = y_of(v)
+        placed.append(
+            f'<rect class="lbg" x="{x0:.1f}" y="{y - LBL_H + 1.1:.1f}" '
+            f'width="{w:.1f}" height="{LBL_H:.1f}"/>'
+            f'<text class="lbt" x="{cx:.1f}" y="{y:.1f}" fill="{color}">{txt}</text>')
+    return f'<g class="lbl{cls_extra}">{"".join(reversed(placed))}</g>'
 
 
 def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, sec=6):
@@ -1293,7 +1376,12 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, s
             f'</h2>',
             '<div class="thinbar">'
             '<label class="chk momtog"><input type="checkbox" id="momToggle" checked>'
-            'MoM 선 표시</label></div>']
+            'MoM 선 표시</label>'
+            '<label class="chk momtog"><input type="checkbox" id="numToggle">'
+            '숫자 표시</label>'
+            '<span class="hintw">숫자를 켜면 1열 전체폭으로 바뀝니다 &mdash; '
+            '3열에서는 한 달이 13px라 숫자가 안 들어갑니다</span>'
+            '</div>']
     return "\n".join(head + body)
 
 
@@ -1829,6 +1917,76 @@ function wireMomToggle(){
   function run(){ document.body.classList.toggle('hide-mom', !cb.checked); }
   cb.addEventListener('change', run); run();
 }
+// Month labels. Drawn on demand from SERIES (already shipped for the modal) plus
+// the per-chart scale in data-sc, so the axes match the Python-drawn lines
+// exactly instead of being re-derived and drifting.
+var LBL_H = 4.6, LBL_FS = 3.7, NS = 'http://www.w3.org/2000/svg';
+function lblPct(a, b){ if(a==null||b==null||b<=0) return null; return (a/b-1)*100; }
+function drawLabels(svg, nMonths){
+  if (svg.dataset.lbl === '1') return;          // already built
+  var sc = (svg.dataset.sc||'').split(',').map(Number);
+  var code = svg.closest('.cbox') && svg.closest('.cbox').dataset.code;
+  if (!code || !SERIES[code] || sc.length < 7) return;
+  var PL=sc[0], slot=sc[1], loY=sc[3], hiY=sc[4], zy=sc[5], half=sc[6];
+  var s = SERIES[code];
+  // the chart window is the last nMonths ending at the reference month, and
+  // the reference month is the last complete one -- one before the pending
+  var end = PEND_YM ? s.length - 2 : s.length - 1;
+  var start = end - nMonths + 1;
+  var yoy = [], mom = [];
+  for (var i = start; i <= end; i++){
+    yoy.push(lblPct(s[i], i>=12 ? s[i-12] : null));
+    mom.push(lblPct(s[i], i>=1  ? s[i-1]  : null));
+  }
+  function yLine(v){ return 246 - (v-loY)/(hiY-loY)*(246-62); }
+  function yMom(v){
+    var c = Math.max(-60, Math.min(60, v));
+    return Math.max(63, Math.min(245, zy - (c/60)*half));
+  }
+  function group(vals, yOf, extra){
+    var g = document.createElementNS(NS,'g');
+    g.setAttribute('class','lbl'+(extra||''));
+    var lastLeft = 1e9, out = [];
+    for (var i = vals.length-1; i >= 0; i--){
+      var v = vals[i]; if (v == null) continue;
+      var txt = (v>0?'+':'') + Math.round(v);
+      var w = txt.length*LBL_FS*0.62 + 2.2;
+      var cx = PL + i*slot + slot/2, x0 = cx-w/2, x1 = cx+w/2;
+      if (i !== vals.length-1 && x1 > lastLeft - 0.8) continue;
+      lastLeft = x0;
+      var y = yOf(v);
+      out.push([x0, y, w, cx, txt]);
+    }
+    out.reverse().forEach(function(o){
+      var r = document.createElementNS(NS,'rect');
+      r.setAttribute('class','lbg'); r.setAttribute('x',o[0].toFixed(1));
+      r.setAttribute('y',(o[1]-LBL_H+1.1).toFixed(1));
+      r.setAttribute('width',o[2].toFixed(1)); r.setAttribute('height',LBL_H);
+      var t = document.createElementNS(NS,'text');
+      t.setAttribute('class','lbt'); t.setAttribute('x',o[3].toFixed(1));
+      t.setAttribute('y',o[1].toFixed(1));   // 색은 CSS(.lbt / .momlbl .lbt)
+      t.textContent = o[4];
+      g.appendChild(r); g.appendChild(t);
+    });
+    return g;
+  }
+  svg.appendChild(group(yoy, yLine));
+  svg.appendChild(group(mom, yMom, ' momlbl'));
+  svg.dataset.lbl = '1';
+}
+function wireNumToggle(nMonths){
+  var cb = document.getElementById('numToggle');
+  if (!cb) return;
+  function run(){
+    var on = cb.checked;
+    // one column, because "+68" cannot fit in a 13px slot at three columns
+    document.body.classList.toggle('wide-charts', on);
+    if (on) document.querySelectorAll('svg.ch').forEach(function(s){
+      drawLabels(s, nMonths);
+    });
+  }
+  cb.addEventListener('change', run); run();
+}
 // heatmap tabs: swap the grid in place, and swap the footnotes with it
 function wireHeatTabs(){
   var tabs = document.querySelectorAll('.tabs .tab');
@@ -1857,7 +2015,10 @@ def render(rows, prows, ref_ym, pending, stats, meta) -> str:
         f'<div class="topline">AI서버 부품군 <b>{n_bom}종목</b> · '
         f'<b>{len(bom_groups.GROUPS)}그룹</b> · 기준월 <b>{esc(ref_ym)}</b> · '
         f'갱신 {esc(built)}</div>',
-        f'<h1>대만 IT 월매출 by CB</h1>',
+        f'<h1>대만 IT 월매출 by CB'
+        + (f'<img class="cbmark" src="{LOGO_DATA_URI}" alt="">'
+           if LOGO_DATA_URI else '<span class="cbmark-e">&#128526;</span>')
+        + '</h1>',
         f'<p class="sub">기준월 <b style="color:var(--a1)">{esc(ref_ym)}</b> '
         f'&nbsp;·&nbsp; {it_total}개 종목 &nbsp;·&nbsp; 금액 단위 <b>백만 NTD</b></p>',
         '<div class="cards">',
@@ -1919,6 +2080,7 @@ YoY·MoM·누계YoY는 build 시점에 원본 절대금액에서 매번 재계�
 {MODAL_JS}
 wire('tAll'); wire('tPend');
 wireModal(); wireMomToggle(); wireHeatTabs();
+wireNumToggle({meta["n_months"]});
 wireFilters({{table:'tAll', q:'q', ind:'fInd', mkt:'fMkt', bom:'fBom',
              small:'fSmall', bomOnly:'fBomOnly', unfiled:'fUnfiled', count:'cnt',
              floor:{groups.MIN_REV_FOR_MOVERS_K}}});
@@ -1934,10 +2096,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Build dashboard.html from data.db")
     ap.add_argument("--db", default=DB_PATH)
     ap.add_argument("--out", default=OUT_PATH)
+    ap.add_argument("--label-mode", choices=("js", "svg"), default="js",
+                    help="월별 숫자 라벨 생성 방식. js=클릭 시 계산(기본), "
+                         "svg=미리 렌더링")
     ap.add_argument("--modal-all", action="store_true",
                     help="ship the detail-modal series for every row in the table, "
                          "not just the BoM stocks, and make table rows clickable")
     args = ap.parse_args(argv)
+    global LABEL_MODE
+    LABEL_MODE = args.label_mode
 
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
