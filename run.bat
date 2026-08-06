@@ -20,13 +20,13 @@ setlocal
 cd /d "%~dp0"
 
 set PY=python
-where %PY% >nul 2>nul || (echo [ERROR] python not found on PATH & exit /b 1)
+where %PY% >nul 2>nul || (echo [ERROR] python not found on PATH & goto :failed)
 
 echo ============================================================
 echo [1/5] company master
 echo ============================================================
 %PY% fetch.py --master
-if errorlevel 1 (echo [ERROR] master fetch failed & exit /b 1)
+if errorlevel 1 (echo [ERROR] master fetch failed & goto :failed)
 
 echo.
 echo ============================================================
@@ -39,7 +39,7 @@ if /i "%~1"=="backfill" (
   echo ============================================================
   %PY% fetch.py
 )
-if errorlevel 1 (echo [ERROR] revenue fetch failed & exit /b 1)
+if errorlevel 1 (echo [ERROR] revenue fetch failed & goto :failed)
 
 echo.
 echo ============================================================
@@ -57,7 +57,7 @@ echo ============================================================
 REM --modal-all ships the detail-modal series for all ~949 rows, not just the
 REM 113 BoM stocks, which makes every table row clickable (+620 KB).
 %PY% build.py --modal-all
-if errorlevel 1 (echo [ERROR] build failed & exit /b 1)
+if errorlevel 1 (echo [ERROR] build failed & goto :failed)
 
 echo.
 echo ============================================================
@@ -75,8 +75,27 @@ if not "%PUBRC%"=="0" (
 )
 
 echo.
-echo done. opening dashboard...
+echo ============================================================
+echo  DONE.  Opening the dashboard...
+echo  Web:  https://cbturbomax.github.io/taiwan-it-revenue/
+echo ============================================================
 start "" "%~dp0dashboard.html"
 endlocal
 REM a failed deploy is not a failed run -- always exit 0
 exit /b 0
+
+REM ---------------------------------------------------------------------------
+REM On failure, hold the window open. This is normally launched by double-click,
+REM and without the pause the console vanishes before the error can be read.
+REM ---------------------------------------------------------------------------
+:failed
+echo.
+echo ============================================================
+echo  STOPPED - see the error above.
+echo  Nothing was broken; the previous dashboard is still in place.
+echo  Just run this again later, or send the message above for help.
+echo ============================================================
+echo.
+pause
+endlocal
+exit /b 1
