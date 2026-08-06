@@ -1,0 +1,126 @@
+name: update dashboard
+
+# 대시보드를 GitHub 서버에서 자동 갱신한다.
+# 이게 없으면 누군가 자기 PC에서 run.bat을 눌러야만 갱신되고, 안 누르는 동안
+# 팀원들은 어제 숫자를 보게 된다.
+#
+# 대만 공시는 익월 10일 마감이고 대만 업무시간(UTC+8)에 들어온다.
+# UTC 02/06/10/14시 = 대만 10/14/18/22시.
+on:
+  schedule:
+    - cron: "0 2,6,10,14 * * *"
+  workflow_dispatch:        # Actions 탭에서 수동 실행 버튼
+
+permissions:
+  contents: write           # gh-pages 브랜치에 push
+
+concurrency:
+  group: update-dashboard
+  cancel-in-progress: false # 겹치면 앞 실행을 끝까지 두고 뒤를 대기시킨다
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # data.db는 저장소에 없다 (17.6MB, 매일 변경). 실행 사이에 캐시로 나른다.
+      # 캐시가 없으면 아래 단계가 원본에서 통째로 다시 만든다 -- 캐시가 만료돼도
+      # 스스로 복구된다.
+      - name: Restore data.db
+        id: dbcache
+        uses: actions/cache/restore@v4
+        with:
+          path: data.db
+          key: twrev-db-${{ github.run_id }}
+          restore-keys: |
+            twrev-db-
+
+      - name: Check reachability
+        run: |
+          python - <<'PY'
+          import ssl, sys, urllib.request
+          sys.path.insert(0, ".")
+          from fetch import make_ssl_context, UA
+          ctx = make_ssl_context()
+          for url in ("https://openapi.twse.com.tw/v1/opendata/t187ap05_L",
+                      "https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_115_6_0.html",
+                      "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"):
+              req = urllib.request.Request(url, headers=UA)
+              with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
+                  print(f"OK {len(r.read()):>9}B  {url}")
+          PY
+
+      - name: Backfill (only when the cache was empty)
+        if: steps.dbcache.outputs.cache-matched-key == ''
+        run: |
+          echo "no cached data.db -- rebuilding from source"
+          python fetch.py --master
+          python fetch.py --backfill
+
+      - name: Fetch
+        run: |
+          python fetch.py --master
+          python fetch.py
+
+      - name: Korean readings
+        # exits 1 on unmapped hanja: a warning, not a failure
+        run: python gen_names_auto.py || true
+
+      - name: Build dashboard
+        run: |
+          python build.py --modal-all
+          ls -lh dashboard.html
+
+      - name: Check for leftover hanja
+        run: python audit_cjk.py || true
+
+      # 새 키로 저장하고 restore-keys 접두사로 최신 것을 되찾는다.
+      # 캐시 항목은 불변이라 같은 키에 덮어쓸 수 없다.
+      - name: Save data.db
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data.db
+          key: twrev-db-${{ github.run_id }}
+
+      # gh-pages에는 항상 커밋 1개만 남긴다. 2.5MB짜리 파일을 매일 쌓으면
+      # 1년에 900MB가 영구히 남는다.
+      - name: Publish to gh-pages
+        run: |
+          set -e
+          STAGE=$(mktemp -d)
+          cp dashboard.html "$STAGE/index.html"
+          touch "$STAGE/.nojekyll"
+          cd "$STAGE"
+          git init -q -b gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "dashboard $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push -q --force \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            gh-pages
+          echo "published"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### 대시보드 갱신"
+            echo ""
+            echo "- https://cbturbomax.github.io/taiwan-it-revenue/"
+            if [ -f dashboard.html ]; then
+              echo "- dashboard.html: $(du -h dashboard.html | cut -f1)"
+            fi
+            if [ -f data.db ]; then
+              echo "- data.db: $(du -h data.db | cut -f1)"
+            fi
+            echo "- cache: ${{ steps.dbcache.outputs.cache-matched-key || '(없음 -> 전체 백필함)' }}"
+          } >> "$GITHUB_STEP_SUMMARY"
