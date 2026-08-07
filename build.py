@@ -848,14 +848,8 @@ details.unf .scroll {{ margin-top:12px; max-height:420px; }}
    세로/가로 양쪽으로 스크롤되는 상자를 만들고, 날짜 헤더는 위에, 부품군 이름은
    왼쪽에 고정한다. sticky 셀은 배경이 투명하면 뒤 행이 그대로 비쳐 지나가므로
    전부 명시적 배경색을 준다. z-index 층: 모서리 6 > 열헤더 5 > 행헤더/단계 4. */
-/* 이 섹션만 wrap(1680px)을 뚫고 화면 폭을 쓴다. 24열짜리 격자는 여백보다
-   칸 폭이 중요하다. 100vw는 세로 스크롤바를 포함하므로 40px 빼서 가로
-   스크롤바가 새로 생기는 것을 막는다. */
-.hmwide {{
-  width:calc(100vw - 40px); max-width:calc(100vw - 40px);
-  margin-left:calc(50% - 50vw + 20px);
-}}
-.hmwide .note {{ max-width:1500px; }}
+/* 폭은 다른 섹션과 똑같이 .wrap이 정한다. 격자가 그보다 넓어지면 이 상자
+   안에서 가로로 스크롤될 뿐, 상자 자체는 옆 섹션과 좌우 끝이 맞는다. */
 .hscroll {{
   max-height:75vh; overflow:auto;
   border:1px solid var(--line); border-radius:10px;
@@ -2063,7 +2057,6 @@ def render_heatmap(rows, ref_ym: str, n_months: int, sec=2, default_n: int = 24)
         return f'<button class="tab per{on}" data-p="{n}">{label}</button>'
 
     return "\n".join([
-        '<section class="hmwide">',
         f'<h2><span class="n">{sec}</span>부품군 히트맵 '
         f'<span class="meta" id="hmMeta" '
         f'data-base="{len(bom_groups.GROUPS)}개 부품군">'
@@ -2083,7 +2076,6 @@ def render_heatmap(rows, ref_ym: str, n_months: int, sec=2, default_n: int = 24)
         f'<div class="hmpane" data-pane="qoq" hidden>'
         f'{heat_table(by_code, axis, ref_ym, 3, HEAT_CLIP_QOQ, window=3, hide_first=cut)}</div>',
         fn_yoy, fn_mom, fn_qoq,
-        '</section>',
     ])
 
 
