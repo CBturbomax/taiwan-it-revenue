@@ -23,7 +23,10 @@ import urllib.request
 from datetime import datetime
 
 LIVE = "https://cbturbomax.github.io/taiwan-it-revenue/"
-STAMP = re.compile(r"갱신\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})")
+# build.py는 항상 KST로 찍는다. 그래야 서버(UTC 실행)와 이 PC의 시각을
+# 같은 기준으로 비교할 수 있다. 'KST' 꼬리표가 없으면 시간대를 알 수 없는
+# 옛 빌드이므로 비교를 거부한다.
+STAMP = re.compile(r"갱신\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s*KST")
 UA = {"User-Agent": "tw-revenue-freshness-check",
       "Cache-Control": "no-cache", "Pragma": "no-cache"}
 

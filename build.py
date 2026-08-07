@@ -29,7 +29,7 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -62,6 +62,12 @@ OUT_PATH = os.path.join(HERE, "dashboard.html")
 # busiest month's row count. Filings are due by the 10th, so the month being
 # filed sits far below the line and never contaminates the body of the report.
 COMPLETE_RATIO = 0.7
+
+# 빌드 시각은 항상 한국시간으로 찍는다.
+# 실행 환경의 로컬 시간을 쓰면 서버(UTC)와 이 PC(KST)의 표기가 9시간 어긋나,
+# 어느 쪽이 최신인지 비교할 수 없다 -- 실제로 그 때문에 낡은 로컬 빌드가
+# 배포본보다 388분 새롭다고 오판되어 배포됐다.
+KST = timezone(timedelta(hours=9))
 
 # 월별 숫자 라벨 크기. 3열 그리드에서 SVG는 약 497px로 그려지고 viewBox는 540
 # 고정이라 배율이 약 0.92다. 화면에서 9px로 보이려면 user unit 기준 9.8이어야 한다.
@@ -2137,13 +2143,13 @@ def render(rows, prows, ref_ym, pending, stats, meta) -> str:
     it_total = len(rows)
     tot_rev = sum(r["rev_now"] for r in rows if r["rev_now"] is not None)
     with_yoy = sum(1 for r in rows if r["yoy"] is not None)
-    built = datetime.now().strftime("%Y-%m-%d %H:%M")
+    built = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
     n_bom = len(bom_groups.all_codes())
     head = "\n".join([
         f'<div class="topline">AI서버 부품군 <b>{n_bom}종목</b> · '
         f'<b>{len(bom_groups.GROUPS)}그룹</b> · 기준월 <b>{esc(ref_ym)}</b> · '
-        f'갱신 {esc(built)}</div>',
+        f'갱신 {esc(built)} KST</div>',
         f'<h1>대만 IT 월매출 by CB'
         + (f'<img class="cbmark" src="{LOGO_DATA_URI}" alt="">'
            if LOGO_DATA_URI else '<span class="cbmark-e">&#128526;</span>')
