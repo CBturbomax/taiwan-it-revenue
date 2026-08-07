@@ -1162,8 +1162,9 @@ def render_pending(pending, prows, ref_ym, it_total, n=1, rows=None):
              f'주말이면 순연되어 이번 마감은 <b>{esc(dl)}</b>'
              + ('(10일이 주말이라 순연)' if rolled else '')
              + ' 입니다 &mdash; <b>대만 공휴일 순연은 미반영</b>입니다.'
-             f'<br>다른 모든 섹션은 완결월 <b>{esc(ref_ym)}</b> 기준이며 '
-             '이 수치는 어디에도 섞이지 않습니다.</div>',
+             f'<br>종목 차트(섹션 2)는 이 달을 낸 회사에 한해 마지막 칸에 '
+             '옅은 막대로 함께 그립니다. <b>그 외 모든 섹션은 완결월 '
+             f'{esc(ref_ym)} 기준</b>이며 이 수치가 섞이지 않습니다.</div>',
              '<div class="cards">',
              f'<div class="card"><div class="k">IT 발표 종목</div>'
              f'<div class="v">{filed}<span style="font-size:20px;color:var(--mute)"> / {it_total}</span></div></div>',
@@ -1536,7 +1537,8 @@ def months_axis(ref_ym: str, n: int) -> list[str]:
     return [shift_ym(ref_ym, -(n - 1 - i)) for i in range(n)]
 
 
-def chart_svg(rec: dict, axis: list[str]) -> str:
+def chart_svg(rec: dict, axis: list[str], hdr_i: int | None = None,
+              pend_ym: str = "") -> str:
     """Bar (revenue, 백만 NTD) + line (YoY%) over `axis`, drawn by hand.
 
     Each bar carries an SVG <title>, which browsers surface as a native tooltip
@@ -1594,6 +1596,15 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
         tip = f"{axis[i]}  {mn(v)} 백만 NTD"
         if yo is not None:
             tip += f"  ·  YoY {yo:+,.1f}%"
+        # 진행 중인 달은 이 회사가 이미 낸 값이지만 시장 전체는 아직 신고
+        # 기간이다. 막대를 옅게 해서 마지막 칸이 완결월이 아님을 보인다.
+        if axis[i] == pend_ym:
+            tip += "  ·  공시 진행 중인 달(발표분)"
+            out.append(f'<rect class="pendbar" x="{x:.1f}" y="{y:.1f}" '
+                       f'width="{barw:.1f}" height="{max(0.6, PB - y):.1f}" '
+                       f'fill="{BAR_FILL}" opacity="0.62">'
+                       f'<title>{esc(tip)}</title></rect>')
+            continue
         out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{barw:.1f}" '
                    f'height="{max(0.6, PB - y):.1f}" fill="{BAR_FILL}">'
                    f'<title>{esc(tip)}</title></rect>')
@@ -1659,14 +1670,17 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
     sub_line(moms, "mom", MOM_COL, 1.4, 0.75, "MoM")
     sub_line(qoqs, "qoq", QOQ_COL, 1.8, 0.9, "QoQ")
 
-    # label row: max revenue on the left, this month's MoM / YoY on the right
-    mom, yoy = rec.get("mom"), rec.get("yoy")
+    # label row: max revenue on the left, one month's MoM / YoY / QoQ on the right.
+    # hdr_i는 그 '한 달'이 어느 달인지다. 7월을 이미 낸 회사는 7월, 아직인
+    # 회사는 완결월 6월. 세 값을 모두 축 배열에서 같은 인덱스로 뽑아야
+    # 헤더 숫자와 선의 마지막 점이 갈리지 않는다.
+    h = len(axis) - 1 if hdr_i is None else hdr_i
+    mom, yoy, qoq = moms[h], yoys[h], qoqs[h]
     out.append(f'<text x="{PL}" y="30" class="cl cmax">{mn(rev_max)}</text>')
     out.append(f'<text x="{PL}" y="50" class="cs">최대 · 백만 NTD</text>')
     # 켜진 선의 숫자만 보여야 하는데, 구분자까지 함께 사라져야 해서 tspan을
     # CSS로 숨기는 방식으로는 " / +67.9" 같은 꼴이 남는다. 값은 data-hdr에
     # 실어두고 토글할 때 JS가 통째로 다시 그린다. 서버는 기본 상태로 그린다.
-    qoq = qoqs[-1] if qoqs else None
     out.append(f'<text x="{PR}" y="30" class="cl chdr" text-anchor="end"></text>')
     out.append(f'<text x="{PR}" y="50" class="cs chlbl" text-anchor="end"></text>')
 
@@ -1694,7 +1708,8 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
     out.append("</svg>")
     svg = "".join(out)
     hdr = "|".join("" if v is None else f"{v:+,.1f}" for v in (mom, yoy, qoq))
-    extra = f' data-hdr="{hdr}"'
+    # 카드마다 기준월이 다를 수 있으므로 헤더 숫자 옆에 그 달을 적는다.
+    extra = f' data-hdr="{hdr}" data-hm="{axis[h][2:4]}/{axis[h][5:7]}"'
     if LABEL_MODE == "js":
         # JS가 파이썬과 똑같은 축을 재현하도록 스케일 파라미터를 실어 보낸다.
         # 축 계산을 JS에 복제하면 선과 라벨이 어긋나기 시작한다.
@@ -1727,10 +1742,19 @@ def label_group(cls: str, vals, y_of, slot: float, color: str,
     return f'<g class="lbl{cls_extra}">{"".join(placed)}</g>'
 
 
-def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, sec=6):
-    """Section 4: every bom_groups stock, one mini chart each, grouped by BoM layer."""
+def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None,
+                  sec=6, pend=None):
+    """Section 4: every bom_groups stock, one mini chart each, grouped by BoM layer.
+
+    진행 중인 달을 이미 낸 회사는 그 달까지 그린다. 축은 카드마다 다르게 두지
+    않고 전 카드가 같은 (완결월 + 진행월) 축을 쓴다. 카드마다 축이 다르면
+    113개를 나란히 훑을 때 같은 x좌표가 다른 달이 되어 비교가 깨진다. 아직
+    안 낸 회사는 마지막 칸이 비어, 그 자체가 '미발표' 표시가 된다.
+    """
     by_code = {r["code"]: r for r in rows}
-    axis = months_axis(ref_ym, n_months)
+    pend_ym = (pend or {}).get("ym", "")
+    pend_vals = (pend or {}).get("vals", {})
+    axis = months_axis(ref_ym, n_months) + ([pend_ym] if pend_ym else [])
     rendered, missing = [], []
 
     if stats is not None:
@@ -1750,6 +1774,7 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, s
         stats["chart_yoy_blank"] = blank
 
     body = []
+    n_pend_filed = 0
     for gname, codes in bom_groups.GROUPS.items():
         present = [c for c in codes if c in by_code]
         missing += [c for c in codes if c not in by_code]
@@ -1765,6 +1790,13 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, s
         body.append('<div class="grid3">')
         for c in present:
             rec = by_code[c]
+            pv = pend_vals.get(c) if pend_ym else None
+            if pv is not None:
+                # rec["rev"]는 완결월까지만 담는다. 진행월 값만 얹은 사본을
+                # 만들어 넘기면 YoY·MoM·QoQ가 전부 기존 함수 그대로 돈다.
+                rec = {**rec, "rev": {**rec["rev"], pend_ym: pv}}
+            hdr_i = len(axis) - 1 if pv is not None else len(axis) - 1 - bool(pend_ym)
+            n_pend_filed += pv is not None
             body.append(
                 f'<figure class="cbox" data-code="{esc(c)}" '
                 f'title="클릭하면 월별 상세가 열립니다">'
@@ -1775,7 +1807,7 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, s
                    if rec.get("cap") else "")
                 + '</div>'
                 f'</figcaption>'
-                f'{chart_svg(rec, axis)}'
+                f'{chart_svg(rec, axis, hdr_i, pend_ym)}'
                 f'<div class="cbiz">{esc(rec["biz"])}</div>'
                 f'</figure>')
         body.append('</div>')
@@ -1801,7 +1833,16 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, s
            f'<span style="color:{MOM_COL}">━</span> 얇은 선 = MoM% '
            f'(±{MOM_CLIP:.0f}% 클리핑, 초과한 달은 점으로 표시)<br>'
            '막대·YoY·MoM은 각각 독립 스케일이고, 점선이 공통 0% 기준선입니다.'
-           '<br><br><b>클릭</b> 하면 전체 이력 월별 상세표가 열립니다 '
+           + (f'<br><br><b>마지막 칸 {esc(pend_ym)}은 공시 진행 중인 달</b>입니다. '
+              '이미 낸 회사만 옅은 막대로 그려지고, 아직 안 낸 회사는 그 칸이 '
+              '비어 있습니다 &mdash; <b>빈 칸 = 미발표</b>입니다. 오른쪽 위 '
+              '숫자도 그 카드가 실제로 그린 마지막 달 기준이라, 카드마다 '
+              f'{esc(pend_ym[2:4])}/{esc(pend_ym[5:7])}과 '
+              f'{esc(ref_ym[2:4])}/{esc(ref_ym[5:7])}이 섞여 있습니다. '
+              '숫자 왼쪽에 그 달을 적어 두었습니다. '
+              '<b>다른 섹션은 전부 완결월 기준</b>이라 이 섹션만 다릅니다.'
+              if pend_ym else "")
+           + '<br><br><b>클릭</b> 하면 전체 이력 월별 상세표가 열립니다 '
            '(← → 로 같은 부품군 내 이동, ESC로 닫기).')
     if missing:
         tip += (f'<br><br>부품군에 등록됐으나 {esc(ref_ym)} 데이터가 없는 코드: '
@@ -1809,7 +1850,10 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, s
 
     head = [f'<h2><span class="n">{sec}</span>AI서버 부품군별 종목 차트 '
             f'<span class="meta">{len(bom_groups.GROUPS)}개 부품군 · {len(rendered)}종목 · '
-            f'{n_months}개월</span>'
+            f'{n_months}개월'
+            + (f' + {esc(pend_ym[2:4])}/{esc(pend_ym[5:7])} 발표분 '
+               f'{n_pend_filed}종목' if pend_ym else "")
+            + '</span>'
             f'<span class="info" tabindex="0">&#9432;<span class="tip">{tip}</span></span>'
             f'</h2>',
             # MoM은 계절성이 커서 평소엔 꺼둔다. 필요할 때만 켠다.
@@ -2199,9 +2243,12 @@ def modal_payload(rows, codes: list[str], lo_ym: str, ref_ym: str,
 
     Pre-rendering 100+ full-history tables would add hundreds of KB of markup
     that almost never gets looked at. Instead the raw 千元 series ships once and
-    the modal computes MoM / YoY / 누계YoY in the browser. 累計 cannot be derived
-    from the monthly figures (a 정정공시 can move revenue between months without
-    restating the cumulative), so it ships alongside.
+    the modal computes MoM / YoY / QoQ in the browser.
+
+    누계YoY를 QoQ로 바꾸면서 累計 계열(SERIES_CUM)을 뺐다. 累計는 월별값에서
+    유도할 수 없어 따로 실어야 했지만, QoQ는 월별값 3개월 합이라 SERIES만으로
+    나온다. 949종목 x 48개월치 숫자 한 벌이 통째로 빠진다.
+    누계YoY 자체는 종목 표(섹션 6)에 그대로 남아 있다.
     """
     n = 0
     end = pend_ym or ref_ym          # 모달은 진행 중인 달까지 전부 보여준다
@@ -2213,17 +2260,15 @@ def modal_payload(rows, codes: list[str], lo_ym: str, ref_ym: str,
 
     disc = disc or {}
     by_code = {r["code"]: r for r in rows}
-    ser, cum, met = {}, {}, {}
+    ser, met = {}, {}
     for c in codes:
         rec = by_code.get(c)
         if rec is None:
             continue
         ser[c] = [rec["rev"].get(ym) for ym in axis]
-        cum[c] = [rec["cum"].get(ym) for ym in axis]
         if pend_ym:
             # rec stops at the reference month; splice the in-progress month on
             ser[c][-1] = (pend_rev or {}).get(c)
-            cum[c][-1] = (pend_cum or {}).get(c)
         met[c] = {"k": rec["name_kr"], "e": rec.get("name_en") or "",
                   "z": rec.get("name") or "", "i": rec["industry_kr"],
                   "g": rec["bom_group"] or "",
@@ -2232,7 +2277,6 @@ def modal_payload(rows, codes: list[str], lo_ym: str, ref_ym: str,
     j = lambda o: json.dumps(o, ensure_ascii=False, separators=(",", ":"))
     payload = (f'const SERIES_START={j(lo_ym)};\n'
                f'const SERIES={j(ser)};\n'
-               f'const SERIES_CUM={j(cum)};\n'
                f'const SMETA={j(met)};\n'
                f'const SDISC={j(disc)};\n'
                f'const PEND_YM={j(pend_ym or "")};\n'
@@ -2328,7 +2372,8 @@ MODAL_HTML = """
     </div>
       <div class="mddisc"></div>
     <div class="scroll mdscroll"><table class="mdtab"><thead><tr>
-      <th class="l">년월</th><th>매출</th><th>MoM%</th><th>YoY%</th><th>누계YoY%</th>
+      <th class="l">년월</th><th>매출</th><th>MoM%</th><th>YoY%</th>
+      <th title="최근3개월 합 / 직전3개월 합 - 1">QoQ%</th>
       <th class="l">발표일</th>
     </tr></thead><tbody></tbody></table></div>
   </div>
@@ -2350,13 +2395,14 @@ function _ym(i){
   return ('000'+Math.floor(t/12)).slice(-4) + '-' + ('0'+(t%12+1)).slice(-2);
 }
 function mdRows(code){
-  var s = SERIES[code], c = SERIES_CUM[code], d = SDISC[code] || {}, out = [];
+  var s = SERIES[code], d = SDISC[code] || {}, out = [];
   for (var i = s.length-1; i >= 0; i--){
     var ym = _ym(i);
+    // QoQ는 차트·히트맵과 같은 3개월 합 규칙(wsum3). 6개월 중 하나라도 비면 null.
     out.push({ ym:ym, rev:s[i],
       mom:_pct(s[i], i>=1 ? s[i-1] : null),
       yoy:_pct(s[i], i>=12 ? s[i-12] : null),
-      cum:_pct(c[i], i>=12 ? c[i-12] : null),
+      qoq:_pct(wsum3(s, i), wsum3(s, i-3)),
       disc: d[ym] || null, has: s[i] != null });
   }
   return out;
@@ -2404,7 +2450,7 @@ function openModal(code, list){
           + '<td class="rev">' + (r.has ? _mn(r.rev) : '<span class="unfiled">미발표</span>') + '</td>'
           + '<td class="' + _cls(r.mom) + '">' + _pc(r.mom) + '</td>'
           + '<td class="' + _cls(r.yoy) + '">' + _pc(r.yoy) + '</td>'
-          + '<td class="' + _cls(r.cum) + '">' + _pc(r.cum) + '</td>'
+          + '<td class="' + _cls(r.qoq) + '">' + _pc(r.qoq) + '</td>'
           + '<td class="l ind">' + disc + '</td></tr>';
   });
   tb.innerHTML = html;
@@ -2424,12 +2470,12 @@ function mdStep(d){
   openModal(MD.list[MD.idx], MD.list);
 }
 function mdCsv(){
-  var head = ['년월','매출(백만NTD)','MoM%','YoY%','누계YoY%','발표일'].join('\\t');
+  var head = ['년월','매출(백만NTD)','MoM%','YoY%','QoQ%','발표일'].join('\\t');
   var body = mdRows(MD.code).map(function(r){
     return [r.ym, r.rev==null?'':Math.round(r.rev/1000),
             r.mom==null?'':r.mom.toFixed(1),
             r.yoy==null?'':r.yoy.toFixed(1),
-            r.cum==null?'':r.cum.toFixed(1),
+            r.qoq==null?'':r.qoq.toFixed(1),
             r.disc||''].join('\\t');
   }).join('\\n');
   var txt = MD.code + '\\t' + SMETA[MD.code].k + '\\n' + head + '\\n' + body;
@@ -2496,9 +2542,9 @@ function drawLabels(svg, nMonths){
   if (!code || !SERIES[code] || sc.length < 7) return;
   var PL=sc[0], slot=sc[1], loY=sc[3], hiY=sc[4], zy=sc[5], half=sc[6];
   var s = SERIES[code];
-  // the chart window is the last nMonths ending at the reference month, and
-  // the reference month is the last complete one -- one before the pending
-  var end = PEND_YM ? s.length - 2 : s.length - 1;
+  // 차트 축은 SERIES의 마지막 달에서 끝난다. 진행 중인 달까지 그리도록
+  // 바뀌었고 SERIES도 그 달을 마지막 원소로 싣고 있어 그대로 맞는다.
+  var end = s.length - 1;
   var start = end - nMonths + 1;
   var yoy = [], mom = [];
   for (var i = start; i <= end; i++){
@@ -2589,7 +2635,8 @@ function renderHeaders(){
       names.push(o[3] + '%');
       first = false;
     });
-    lab.textContent = names.join(' / ');
+    // 카드마다 기준월이 다르므로(7월 발표분 / 완결월 6월) 달을 같이 적는다
+    lab.textContent = (svg.dataset.hm ? svg.dataset.hm + '  ' : '') + names.join(' / ');
   });
 }
 function wireLineToggles(){
@@ -3064,7 +3111,7 @@ def render(rows, prows, ref_ym, pending, stats, meta) -> str:
 <div class="wrap">
 {head}
 {render_timeline(rows, meta["pend"], ref_ym, meta["mc"], sec=1)}
-{render_charts(rows, ref_ym, meta["n_months"], stats, sec=2)}
+{render_charts(rows, ref_ym, meta["n_months"], stats, sec=2, pend=meta["pend"])}
 {render_heatmap(rows, ref_ym, meta["heat_months"], sec=3,
                 default_n=meta["heat_default"])}
 {render_inflection(rows, ref_ym, sec=4)}
@@ -3093,7 +3140,7 @@ wire('tAll'); wire('tPend');
 wire('tTL');
 wire('tTLU');
 wireModal(); wireLineToggles(); wireHeatTabs(); wireTimeline(1.0);
-wireNumToggle({meta["n_months"]});
+wireNumToggle({meta["n_months"] + (1 if meta["pend"] else 0)});
 wireJumps(); wireGroupModal();
 wireHeatPeriod({meta["heat_months"]}, {meta["heat_default"]});
 wireFilters({{table:'tAll', q:'q', ind:'fInd', mkt:'fMkt', bom:'fBom',
