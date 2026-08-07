@@ -24,6 +24,25 @@ REM ===========================================================================
 setlocal
 cd /d "%~dp0"
 
+REM --dry-run: run every guard and stop before touching the remote.
+REM Use this to test the guards -- testing with a real run is what pushed a
+REM stale dashboard twice.
+if /i "%~1"=="--dry-run" (
+  echo [publish] DRY RUN -- nothing will be pushed.
+  if not exist "dashboard.html" (
+    echo [publish] dashboard.html not found.
+    exit /b 1
+  )
+  where python >nul 2>nul || (echo [publish] python not found. & exit /b 1)
+  python "%~dp0check_fresh.py" "%~dp0dashboard.html"
+  if errorlevel 1 (
+    echo [publish] verdict: WOULD REFUSE ^(deployed build is newer^)
+    exit /b 1
+  )
+  echo [publish] verdict: would publish
+  exit /b 0
+)
+
 if /i not "%~1"=="--force" (
   echo.
   echo ============================================================

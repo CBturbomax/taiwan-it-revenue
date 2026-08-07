@@ -278,6 +278,50 @@ def load_pending_values(conn, ym: str, codes: list[str]) -> tuple[dict, dict]:
     return rev, cum
 
 
+def load_mktcap(conn) -> dict:
+    """시가총액 재료. 종가나 주식수가 없으면 그 종목은 아예 빼서 빈칸이 되게 한다.
+
+    반환: {"cap": {code: (usd_b, krw_jo)}, "date": 거래일, "fx": {...}, ...}
+    """
+    out = {"cap": {}, "date": None, "usdtwd": None, "usdkrw": None,
+           "fx_as_of": None, "n": 0}
+    try:
+        fx = {r["pair"]: (r["rate"], r["as_of"])
+              for r in conn.execute("SELECT pair, rate, as_of FROM fx")}
+        rows = list(conn.execute(
+            "SELECT c.code, c.shares, p.close_twd, p.trade_date "
+            "FROM company c JOIN price p ON p.code = c.code "
+            "WHERE c.shares > 0 AND p.close_twd > 0"))
+    except sqlite3.OperationalError:
+        return out
+    if "USDTWD" not in fx or "USDKRW" not in fx:
+        return out
+    usdtwd, out["fx_as_of"] = fx["USDTWD"]
+    usdkrw = fx["USDKRW"][0]
+    out["usdtwd"], out["usdkrw"] = usdtwd, usdkrw
+    if not usdtwd or not usdkrw:
+        return out
+    for r in rows:
+        twd = r["close_twd"] * r["shares"]          # 시총 (TWD)
+        usd_b = twd / usdtwd / 1e9                  # 십억 USD
+        krw_jo = twd / usdtwd * usdkrw / 1e12       # 조 KRW
+        out["cap"][r["code"]] = (usd_b, krw_jo)
+        if out["date"] is None or (r["trade_date"] or "") > out["date"]:
+            out["date"] = r["trade_date"]
+    out["n"] = len(out["cap"])
+    return out
+
+
+def fmt_cap(v) -> str:
+    """(usd_b, krw_jo) -> '$14.2B · 19.8조'. 없으면 빈칸."""
+    if not v:
+        return ""
+    usd_b, krw_jo = v
+    u = f"${usd_b / 1000:.2f}T" if usd_b >= 1000 else f"${usd_b:.1f}B"
+    k = f"{krw_jo:,.0f}조" if krw_jo >= 1000 else f"{krw_jo:.1f}조"
+    return f'{u} <span class="capk">{k}</span>'
+
+
 def load_master(conn) -> dict:
     """code -> English abbreviation. Empty when --master has never been run."""
     try:
@@ -287,7 +331,8 @@ def load_master(conn) -> dict:
         return {}
 
 
-def load(conn, ref_ym: str, master: dict) -> tuple[list[dict], dict]:
+def load(conn, ref_ym: str, master: dict, caps: dict | None = None
+         ) -> tuple[list[dict], dict]:
     """One record per IT company, carrying its monthly and cumulative series."""
     # The IT industry filter, plus every bom_groups code regardless of its
     # official industry. 8996 高力 (액냉 CDU용 판형 열교환기) is filed under
@@ -308,6 +353,7 @@ def load(conn, ref_ym: str, master: dict) -> tuple[list[dict], dict]:
         kr, layer = korean_name(r["code"], r["name"])
         ind_kr = groups.INDUSTRY_KR.get(r["industry"], r["industry"])
         recs[r["code"]] = {k: r[k] for k in r.keys()} | {
+            "cap": (caps or {}).get(r["code"]),
             "name_en": master.get(r["code"]), "name_kr": kr, "name_layer": layer,
             "industry_kr": ind_kr,
             "bom_group": bom_groups.group_of(r["code"]),
@@ -717,9 +763,24 @@ svg.ch rect[fill="{ACCENT2}"] {{ cursor:crosshair; }}
 .chk.off {{ opacity:.4; }}
 
 /* --- 발표 타임라인 --- */
-.tlsum {{ font-size:19px; color:var(--mute); }}
-.tlsum b {{ color:var(--fg); font-size:21px; }}
-.tlsum .sep {{ margin:0 10px; opacity:.45; }}
+.tlhead {{
+  display:flex; flex-wrap:wrap; align-items:center; gap:18px; margin:14px 0;
+  background:var(--panel); border:1px solid var(--line); border-radius:10px;
+  padding:16px 20px;
+}}
+.tlbig {{ display:flex; flex-direction:column; line-height:1.15; }}
+.tlbig b {{ font-size:38px; font-weight:800; color:var(--a1); }}
+.tlbig span {{ font-size:16px; color:var(--mute); }}
+.tlbig.dim b {{ color:var(--mute); }}
+.tlbig.ok b {{ font-size:26px; color:var(--fg); }}
+.tlbig.warn b {{ font-size:26px; color:var(--a3); }}
+.tlmeta {{ font-size:17px; color:var(--mute); line-height:1.5; }}
+.tlmeta b {{ color:var(--fg); }}
+.tlchk {{ margin-left:auto; }}
+td.cap {{ color:#cfe0ec; font-size:18px; white-space:nowrap; }}
+td.cap .capk {{ color:var(--mute); font-size:16px; margin-left:6px; }}
+.ccap {{ margin-left:10px; color:#a9bccb; }}
+.ccap .capk {{ color:var(--mute); }}
 td.tlts {{ color:var(--a1); font-weight:700; font-variant-numeric:tabular-nums; }}
 /* 부품군 종목은 배경으로 구분한다 -- 이 행들이 실제로 보는 대상이다 */
 table tbody tr.isbom {{ background:#16212b; }}
@@ -861,7 +922,7 @@ function wireFilters(cfg){
   var rows = Array.prototype.slice.call(t.tBodies[0].rows);
   var total = rows.length;
   var el = {};
-  ['q','ind','mkt','bom','small','bomOnly','unfiled','count'].forEach(function(k){
+  ['q','ind','mkt','bom','small','bomOnly','unfiled','cap','count'].forEach(function(k){
     el[k] = cfg[k] ? document.getElementById(cfg[k]) : null;
   });
   function run(){
@@ -870,6 +931,8 @@ function wireFilters(cfg){
     var mkt = el.mkt ? el.mkt.value : '';
     var bom = el.bom ? el.bom.value : '';
     var unfiled = el.unfiled ? el.unfiled.checked : false;
+    // 시총 필터는 이 표에서만 쓴다. 차트/히트맵/변곡점검/movers는 손대지 않는다.
+    var capMin = (el.cap && el.cap.checked) ? cfg.capFloorJo : 0;
     var bomOnly = el.bomOnly ? el.bomOnly.checked : false;
     // The 113 BoM stocks are hand-picked, so the small-revenue cutoff has no
     // job there -- it would silently drop 3234 光環 (77 백만). Neutralise it and
@@ -889,6 +952,7 @@ function wireFilters(cfg){
             && (bom === '' || d.bom === bom)
             && (!bomOnly || d.bom !== '')
             && (!unfiled || d.filed === '0')
+            && (!capMin || parseFloat(d.cap || 0) >= capMin)
             && (!hideSmall || parseFloat(d.rev) >= cfg.floor);
       r.classList.toggle('hide', !ok);
       if (ok) n++;
@@ -899,7 +963,7 @@ function wireFilters(cfg){
         : '<b>' + n + '</b> / ' + total + '개 종목';
     }
   }
-  ['q','ind','mkt','bom','small','bomOnly','unfiled'].forEach(function(k){
+  ['q','ind','mkt','bom','small','bomOnly','unfiled','cap'].forEach(function(k){
     if (el[k]) el[k].addEventListener(k === 'q' ? 'input' : 'change', run);
   });
   run();
@@ -969,13 +1033,18 @@ def render_pending(pending, prows, ref_ym, it_total, n=1):
     return "\n".join(parts)
 
 
-def render_timeline(rows, pend, ref_ym, sec=5):
-    """진행 중인 달의 발표 타임라인. 최신 감지순."""
+def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
+    """진행 중인 달의 발표 타임라인. 최신 감지순.
+
+    대시보드를 열자마자 '지금 누가 발표했고 누가 아직인지'가 보이도록 맨 위에 둔다.
+    """
     if not pend:
         return ""
+    mc = mc or {"cap": {}}
     ym, stamps, dates = pend["ym"], pend["stamps"], pend["dates"]
     vals, dl = pend["vals"], pend["deadline"]
     lab = f"{ym[2:4]}/{ym[5:7]}"
+    days_left = (date.fromisoformat(dl) - date.today()).days
 
     by_code = {r["code"]: r for r in rows}
     filed, unfiled = [], []
@@ -993,19 +1062,31 @@ def render_timeline(rows, pend, ref_ym, sec=5):
     newest_txt = f"{newest[5:10]} {newest[11:16]} KST" if newest else "아직 없음"
     n_bom_filed = sum(1 for r in filed if r["bom_group"])
 
+    if days_left > 1:
+        dtxt, dcls = f"마감까지 {days_left}일", "ok"
+    elif days_left == 1:
+        dtxt, dcls = "마감 내일", "warn"
+    elif days_left == 0:
+        dtxt, dcls = "오늘 마감", "warn"
+    else:
+        dtxt, dcls = f"마감 {-days_left}일 지남", "warn"
+
     parts = [
         f'<h2><span class="n">{sec}</span>발표 타임라인 &mdash; {esc(ym)}</h2>',
-        '<div class="tools">'
-        f'<span class="tlsum">IT <b>{len(filed)}</b> / {len(rows)} 발표'
-        f'<span class="sep">·</span>부품군 <b>{n_bom_filed}</b> / '
-        f'{sum(1 for r in rows if r["bom_group"])}'
-        f'<span class="sep">·</span>마감 <b>{esc(dl[5:7])}/{esc(dl[8:])}</b>'
-        f'<span class="sep">·</span>마지막 감지 <b>{esc(newest_txt)}</b></span>'
-        '<label class="chk"><input type="checkbox" id="tlBom">부품군만</label>'
+        '<div class="tlhead">'
+        f'<div class="tlbig"><b>{len(filed)}</b><span>발표</span></div>'
+        f'<div class="tlbig dim"><b>{len(unfiled)}</b><span>미발표</span></div>'
+        f'<div class="tlbig {dcls}"><b>{esc(dtxt)}</b>'
+        f'<span>{esc(dl)}</span></div>'
+        f'<div class="tlmeta">부품군 <b>{n_bom_filed}</b> / '
+        f'{sum(1 for r in rows if r["bom_group"])} 발표'
+        f'<br>마지막 감지 <b>{esc(newest_txt)}</b></div>'
+        '<label class="chk tlchk"><input type="checkbox" id="tlBom">부품군만</label>'
         '</div>',
         '<div class="scroll"><table id="tTL"><thead><tr>'
         + th("발표시각(KST)", "l") + th("코드", "l pin") + th("한글명", "l")
-        + th("부품군", "l") + th("당월매출", "", "백만 NTD")
+        + th("부품군", "l") + th("시가총액", "l", "종가 x 보통주 발행주식수")
+        + th("당월매출", "", "백만 NTD")
         + th("MoM%") + th("YoY%")
         + '</tr></thead><tbody>']
 
@@ -1021,6 +1102,8 @@ def render_timeline(rows, pend, ref_ym, sec=5):
             f'<td class="l pin code" data-v="{esc(r["code"])}">{esc(r["code"])}</td>'
             f'<td class="l" data-v="{esc(r["name_kr"])}">{name_cell(r)}</td>'
             f'<td class="l bom" data-v="{esc(g)}">{esc(g)}</td>'
+            f'<td class="l cap" data-v="{(r["cap"] or [0])[0]:.4f}">'
+            f'{fmt_cap(r["cap"])}</td>'
             f'<td class="rev" data-v="{vals[r["code"]]}">{mn(vals[r["code"]])}</td>'
             f'<td class="{cls(mom)}" data-v="{sort_key(mom)}">{pc(mom)}</td>'
             f'<td class="{cls(yoy)}" data-v="{sort_key(yoy)}">{pc(yoy)}</td>'
@@ -1053,7 +1136,14 @@ def render_timeline(rows, pend, ref_ym, sec=5):
         '<br>· 추적은 2026-08부터 시작해 그 이전 데이터는 <b>&mdash;</b>로 '
         '표시됩니다'
         '<br>· 시각은 한국시간(KST)입니다. 대만은 1시간 느립니다'
-        '</div>')
+        + (f'<br>· 시가총액 = 종가 x 보통주 발행주식수. <b>종가 기준일 '
+           f'{esc(mc.get("date") or "?")}</b> (대만장 마감은 대만시간 13:30이라 '
+           f'장중 실행이면 전일 종가입니다). 환율 기준 '
+           f'{esc((mc.get("fx_as_of") or "?"))}'
+           '<br>· <b>우선주가 있는 회사는 보통주만 계산되어 실제보다 작게 '
+           '나옵니다.</b> 종가나 주식수가 없는 종목은 빈칸입니다'
+           if mc.get("cap") else "")
+        + '</div>')
     return "\n".join(parts)
 
 
@@ -1064,7 +1154,9 @@ def opts(values, label):
     return "".join(o)
 
 
-def render_table(rows, ref_ym, n=2, clickable=False, pend=None):
+def render_table(rows, ref_ym, n=2, clickable=False, pend=None, mc=None):
+    mc = mc or {"cap": {}}
+    has_cap = bool(mc.get("cap"))
     floor = groups.MIN_REV_FOR_MOVERS_K
     p_ym = pend["ym"] if pend else None
     p_lab = f"{p_ym[2:4]}/{p_ym[5:7]}" if p_ym else ""
@@ -1087,12 +1179,16 @@ def render_table(rows, ref_ym, n=2, clickable=False, pend=None):
              f'부품군 종목만 ({n_bom})</label>'
              + ('<label class="chk"><input type="checkbox" id="fUnfiled">'
                 f'{p_lab} 미발표만</label>' if p_ym else "")
+             # 시총 필터는 이 표에서만, 기본 꺼짐. 다른 섹션은 건드리지 않는다.
+             + ('<label class="chk"><input type="checkbox" id="fCap">'
+                '시총 1조원 미만 숨기기</label>' if has_cap else "")
              + '<span class="count" id="cnt"></span>'
              '</div>',
              f'<div class="scroll"><table id="tAll"'
              f'{" class=clickable" if clickable else ""}><thead><tr>']
     parts.append(th("코드", "l pin") + th("종목명", "l") + th("업종", "l")
                  + th("부품군", "l") + th("시장", "l")
+                 + (th("시가총액", "l", "종가 x 보통주 발행주식수") if has_cap else "")
                  + th("당월매출", "", "백만 NTD")
                  + th("MoM%", "", "당월 / 전월 - 1")
                  + th("YoY%", "", "당월 / 전년동월 - 1")
@@ -1117,6 +1213,7 @@ def render_table(rows, ref_ym, n=2, clickable=False, pend=None):
             f'<tr data-code="{esc(r["code"])}" data-s="{esc(s)}" '
             f'data-ind="{esc(r["industry_kr"])}" '
             f'data-mkt="{esc(mk)}" data-bom="{esc(g)}" data-rev="{r["rev_now"]}" '
+            f'data-cap="{(r["cap"] or [0, 0])[1]:.4f}" '
             f'data-filed="{1 if filed else 0}">'
             f'<td class="l pin code" data-v="{esc(r["code"])}">{esc(r["code"])}</td>'
             f'<td class="l" data-v="{esc(r["name_kr"])}">{name_cell(r, with_biz=True)}</td>'
@@ -1126,7 +1223,9 @@ def render_table(rows, ref_ym, n=2, clickable=False, pend=None):
             f'title="{esc(r["industry"])}">{esc(r["industry_kr"])}</td>'
             f'<td class="l bom" data-v="{esc(g)}">{esc(g)}</td>'
             f'<td class="l ind" data-v="{esc(mk)}">{esc(mk)}</td>'
-            f'<td class="rev" data-v="{r["rev_now"]}">{mn(r["rev_now"])}</td>'
+            + (f'<td class="l cap" data-v="{(r["cap"] or [0])[0]:.4f}">'
+               f'{fmt_cap(r["cap"])}</td>' if has_cap else "")
+            + f'<td class="rev" data-v="{r["rev_now"]}">{mn(r["rev_now"])}</td>'
             f'<td class="{cls(r["mom"])}" data-v="{sort_key(r["mom"])}">{pc(r["mom"])}</td>'
             f'<td class="{cls(r["yoy"])}" data-v="{sort_key(r["yoy"])}">{pc(r["yoy"])}</td>'
             f'<td class="{cls(r["yoy_accel"])}" data-v="{sort_key(r["yoy_accel"])}">'
@@ -1456,7 +1555,10 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, s
                 f'title="클릭하면 월별 상세가 열립니다">'
                 f'<figcaption class="chd">'
                 f'<span class="code">{esc(c)}</span> {name_cell(rec)}'
-                f'<div class="cind">{esc(rec["industry_kr"])}</div>'
+                f'<div class="cind">{esc(rec["industry_kr"])}'
+                + (f'<span class="ccap">{fmt_cap(rec["cap"])}</span>'
+                   if rec.get("cap") else "")
+                + '</div>'
                 f'</figcaption>'
                 f'{chart_svg(rec, axis)}'
                 f'<div class="cbiz">{esc(rec["biz"])}</div>'
@@ -2191,12 +2293,12 @@ def render(rows, prows, ref_ym, pending, stats, meta) -> str:
 <body>
 <div class="wrap">
 {head}
-{render_charts(rows, ref_ym, meta["n_months"], stats, sec=1)}
-{render_heatmap(rows, ref_ym, meta["heat_months"], sec=2)}
-{render_inflection(rows, ref_ym, sec=3)}
-{render_pending(pending, prows, ref_ym, it_total, n=4)}
-{render_timeline(rows, meta["pend"], ref_ym, sec=5)}
-{render_table(rows, ref_ym, n=6, clickable=meta["table_clickable"], pend=meta["pend"])}
+{render_timeline(rows, meta["pend"], ref_ym, meta["mc"], sec=1)}
+{render_charts(rows, ref_ym, meta["n_months"], stats, sec=2)}
+{render_heatmap(rows, ref_ym, meta["heat_months"], sec=3)}
+{render_inflection(rows, ref_ym, sec=4)}
+{render_pending(pending, prows, ref_ym, it_total, n=5)}
+{render_table(rows, ref_ym, n=6, clickable=meta["table_clickable"], pend=meta["pend"], mc=meta["mc"])}
 {render_movers(rows, ref_ym, sec=7)}
 {MODAL_HTML}
 <footer>
@@ -2219,7 +2321,8 @@ wire('tTL');
 wireModal(); wireMomToggle(); wireHeatTabs(); wireTimeline();
 wireNumToggle({meta["n_months"]});
 wireFilters({{table:'tAll', q:'q', ind:'fInd', mkt:'fMkt', bom:'fBom',
-             small:'fSmall', bomOnly:'fBomOnly', unfiled:'fUnfiled', count:'cnt',
+             small:'fSmall', bomOnly:'fBomOnly', unfiled:'fUnfiled',
+             cap:'fCap', capFloorJo:1.0, count:'cnt',
              floor:{groups.MIN_REV_FOR_MOVERS_K}}});
 markSorted('tAll', 5, 'desc');   // 당월매출 내림차순 = Python이 넘긴 기본 순서
 </script>
@@ -2264,6 +2367,14 @@ def main(argv=None) -> int:
           f"({shift_ym(ref_ym, -(n_months - 1))} .. {ref_ym})")
     print(f"  IT industries              : {len(groups.IT_INDUSTRIES)}")
 
+    mc = load_mktcap(conn)
+    if mc["n"]:
+        print(f"  market cap                 : {mc['n']:,}종목, "
+              f"종가 기준일 {mc['date']}, USDTWD={mc['usdtwd']:,.4f} "
+              f"USDKRW={mc['usdkrw']:,.2f}")
+    else:
+        print("  market cap                 : 재료 없음 (종가/주식수/환율 미수집)")
+
     master = load_master(conn)
     if not master:
         print("  !! company master is empty -- run `python fetch.py --master` for "
@@ -2271,7 +2382,7 @@ def main(argv=None) -> int:
     else:
         print(f"  company master             : {len(master)} codes with English abbr")
 
-    rows, stats = load(conn, ref_ym, master)
+    rows, stats = load(conn, ref_ym, master, mc["cap"])
     prows = load_pending(conn, pending, master)
     named = sum(1 for r in rows if r.get("name_en"))
     layers = {}
@@ -2349,7 +2460,8 @@ def main(argv=None) -> int:
     html_out = render(rows, prows, ref_ym, pending, stats,
                       {"lo": lo, "pub": pub, "n_months": n_months,
                        "heat_months": heat_months, "payload": payload,
-                       "table_clickable": args.modal_all, "pend": pend})
+                       "table_clickable": args.modal_all, "pend": pend,
+                       "mc": mc})
     print(f"  charts                     : {stats.get('chart_stocks', 0)} stocks "
           f"x {n_months} months = {stats.get('chart_points', 0)} points")
     print(f"    YoY from the source's 去年當月營收: {stats.get('chart_yoy_fallback', 0)}"

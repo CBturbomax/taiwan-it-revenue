@@ -63,10 +63,20 @@ TPEX_API = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
 TWSE_MASTER = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
 TPEX_MASTER = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
 MASTER_FIELDS = {
-    # market: (url, code_key, zh_name_key, en_name_key)
-    "TWSE": (TWSE_MASTER, "公司代號", "公司簡稱", "英文簡稱"),
-    "TPEX": (TPEX_MASTER, "SecuritiesCompanyCode", "CompanyAbbreviation", "Symbol"),
+    # market: (url, code_key, zh_name_key, en_name_key, shares_key)
+    # 주식수는 보통주만이다. 우선주가 있는 회사는 시총이 실제보다 작게 나온다.
+    "TWSE": (TWSE_MASTER, "公司代號", "公司簡稱", "英文簡稱",
+             "已發行普通股數或TDR原股發行股數"),
+    "TPEX": (TPEX_MASTER, "SecuritiesCompanyCode", "CompanyAbbreviation", "Symbol",
+             "IssueShares"),
 }
+
+# 일별 종가. 대만장 마감은 대만시간 13:30이라, 그 전에 돌면 전일 종가가 온다.
+TWSE_PRICE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+TPEX_PRICE = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
+
+# 환율. 키·인증 없이 열려 있고 갱신 시각을 함께 준다.
+FX_URL = "https://open.er-api.com/v6/latest/USD"
 
 UA = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) tw-revenue/1.0",
@@ -475,10 +485,10 @@ def clean(s) -> str | None:
 
 
 def fetch_master(http: Http) -> list[dict]:
-    """Company master: code, Chinese short name, English abbreviation, market."""
+    """Company master: code, Chinese short name, English abbreviation, market, shares."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rows = []
-    for market, (url, k_code, k_zh, k_en) in MASTER_FIELDS.items():
+    for market, (url, k_code, k_zh, k_en, k_sh) in MASTER_FIELDS.items():
         try:
             data = json.loads(http.get(url).decode("utf-8-sig"))
         except Exception as e:
@@ -496,13 +506,78 @@ def fetch_master(http: Http) -> list[dict]:
             code = clean(d.get(k_code))
             if not code or not RE_CODE.fullmatch(code):
                 continue
+            sh = to_int_k(d.get(k_sh))
             rows.append({"code": code, "name_zh": clean(d.get(k_zh)),
                          "name_en": clean(d.get(k_en)), "market": market,
+                         "shares": sh if sh and sh > 0 else None,
                          "source": url.rsplit("/", 1)[-1], "fetched_at": now})
             got += 1
         n_en = sum(1 for r in rows[-got:] if r["name_en"])
-        print(f"    {market} master: {got:>5} rows, {n_en} with English abbr")
+        n_sh = sum(1 for r in rows[-got:] if r["shares"])
+        print(f"    {market} master: {got:>5} rows, {n_en} with English abbr, "
+              f"{n_sh} with share count")
     return rows
+
+
+def fetch_prices(http: Http) -> list[tuple]:
+    """양 시장의 최신 종가. 시총 계산에만 쓰므로 종목당 한 건."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    out = []
+    for url, market, code_key, close_key in (
+        (TWSE_PRICE, "twse-price", "Code", "ClosingPrice"),
+        (TPEX_PRICE, "tpex-price", "SecuritiesCompanyCode", "Close"),
+    ):
+        try:
+            data = json.loads(http.get(url).decode("utf-8-sig"))
+        except Exception as e:
+            print(f"    {market}: FAILED {type(e).__name__}: {str(e)[:110]}")
+            continue
+        if not isinstance(data, list) or not data:
+            print(f"    {market}: unexpected payload, skipped")
+            continue
+        got, dates = 0, set()
+        for d in data:
+            code = clean(d.get(code_key))
+            if not code or not RE_CODE.fullmatch(code):
+                continue
+            raw = (d.get(close_key) or "").replace(",", "").strip()
+            if not raw or raw in ("--", "---", "0.00"):
+                continue
+            try:
+                close = float(raw)
+            except ValueError:
+                continue
+            if close <= 0:
+                continue
+            td = parse_roc_date(d.get("Date", ""))
+            if not td:
+                continue
+            dates.add(td)
+            out.append((code, td, close, market, now))
+            got += 1
+        print(f"    {market}: {got:>5} 종목, 거래일 {sorted(dates)}")
+    return out
+
+
+def fetch_fx(http: Http) -> list[tuple]:
+    """USD 기준 환율. 키가 필요 없고 갱신 시각을 함께 준다."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        d = json.loads(http.get(FX_URL).decode("utf-8"))
+    except Exception as e:
+        print(f"    fx: FAILED {type(e).__name__}: {str(e)[:110]}")
+        return []
+    if d.get("result") != "success":
+        print(f"    fx: result={d.get('result')}, skipped")
+        return []
+    rates, as_of = d.get("rates", {}), d.get("time_last_update_utc", "")
+    out = []
+    for pair, key in (("USDTWD", "TWD"), ("USDKRW", "KRW")):
+        v = rates.get(key)
+        if isinstance(v, (int, float)) and v > 0:
+            out.append((pair, float(v), as_of, now))
+    print(f"    fx: {', '.join(f'{p}={r:,.4f}' for p, r, _, _ in out)}  ({as_of})")
+    return out
 
 
 def fetch_apis(http: Http) -> list[dict]:
@@ -583,20 +658,50 @@ CREATE TABLE IF NOT EXISTS company (
     name_zh    TEXT,                        -- 公司簡稱 / CompanyAbbreviation
     name_en    TEXT,                        -- 英文簡稱 / Symbol
     market     TEXT,                        -- 'TWSE' | 'TPEX'
+    shares     INTEGER,                     -- 보통주 발행주식수 (우선주 제외)
     source     TEXT,
+    fetched_at TEXT
+);
+
+-- 일별 종가. 종목당 최신 한 건만 둔다 (시총 계산용이라 이력이 필요 없다).
+CREATE TABLE IF NOT EXISTS price (
+    code       TEXT PRIMARY KEY,
+    trade_date TEXT,                        -- 'YYYY-MM-DD' 대만 거래일
+    close_twd  REAL,
+    source     TEXT,
+    fetched_at TEXT
+);
+
+-- 환율. as_of는 제공처가 알려주는 갱신 시각이다.
+CREATE TABLE IF NOT EXISTS fx (
+    pair       TEXT PRIMARY KEY,            -- 'USDTWD' | 'USDKRW'
+    rate       REAL,
+    as_of      TEXT,
     fetched_at TEXT
 );
 """
 
 COMPANY_UPSERT = """
-INSERT INTO company (code, name_zh, name_en, market, source, fetched_at)
-VALUES (:code, :name_zh, :name_en, :market, :source, :fetched_at)
+INSERT INTO company (code, name_zh, name_en, market, shares, source, fetched_at)
+VALUES (:code, :name_zh, :name_en, :market, :shares, :source, :fetched_at)
 ON CONFLICT(code) DO UPDATE SET
     name_zh    = COALESCE(excluded.name_zh, company.name_zh),
     name_en    = COALESCE(excluded.name_en, company.name_en),
     market     = COALESCE(excluded.market, company.market),
+    shares     = COALESCE(excluded.shares, company.shares),
     source     = excluded.source,
     fetched_at = excluded.fetched_at
+"""
+
+PRICE_UPSERT = """
+INSERT INTO price (code, trade_date, close_twd, source, fetched_at)
+VALUES (?,?,?,?,?)
+ON CONFLICT(code) DO UPDATE SET
+    trade_date = excluded.trade_date,
+    close_twd  = excluded.close_twd,
+    source     = excluded.source,
+    fetched_at = excluded.fetched_at
+WHERE excluded.trade_date >= price.trade_date
 """
 
 VALUE_FIELDS = ("rev_month_k", "rev_last_month_k", "rev_ly_month_k",
@@ -638,7 +743,44 @@ def connect(path: str) -> sqlite3.Connection:
         if col not in have:
             conn.execute(f"ALTER TABLE revenue ADD COLUMN {col} {decl}")
             print(f"  migrated: added revenue.{col}")
+    havec = {r["name"] for r in conn.execute("PRAGMA table_info(company)")}
+    if "shares" not in havec:
+        conn.execute("ALTER TABLE company ADD COLUMN shares INTEGER")
+        print("  migrated: added company.shares")
+    migrate_disclosure_kst(conn)
     return conn
+
+
+def migrate_disclosure_kst(conn: sqlite3.Connection) -> int:
+    """발표시각을 KST로 통일한다 (일회성, 반복 실행해도 안전).
+
+    발표일을 도입한 첫날에는 실행 환경의 로컬 시각을 그대로 적었다. 서버는
+    UTC라 +00:00으로 기록됐고, 화면에는 9시간 이른 시각으로 표시된다.
+    +00:00으로 끝나는 행만 골라 9시간을 더하고 오프셋을 +09:00으로 바꾼다.
+    한 번 바뀌면 더 이상 걸리지 않으므로 매번 호출해도 무해하다.
+    """
+    try:
+        rows = list(conn.execute(
+            "SELECT code, ym, first_seen_ts FROM disclosure "
+            "WHERE first_seen_ts LIKE '%+00:00'"))
+    except sqlite3.OperationalError:
+        return 0
+    if not rows:
+        return 0
+    fixed = []
+    for r in rows:
+        try:
+            dt = datetime.fromisoformat(r["first_seen_ts"]).astimezone(KST)
+        except ValueError:
+            continue
+        fixed.append((dt.date().isoformat(), dt.isoformat(timespec="seconds"),
+                      r["code"], r["ym"]))
+    with conn:
+        conn.executemany(
+            "UPDATE disclosure SET first_seen_date=?, first_seen_ts=? "
+            "WHERE code=? AND ym=?", fixed)
+    print(f"  migrated: 발표시각 {len(fixed)}건을 UTC -> KST로 변환")
+    return len(fixed)
 
 
 def _src_priority(source: str) -> int:
@@ -841,6 +983,21 @@ def report(conn: sqlite3.Connection):
                          "GROUP BY source ORDER BY n DESC"):
         print(f"  {row['source']:<16} {row['n']:>7,}  newest 出表日期 {row['p']}")
 
+    print("\n시가총액 재료:")
+    try:
+        n_sh = c.execute("SELECT COUNT(*) FROM company WHERE shares > 0").fetchone()[0]
+        n_pr, td = c.execute(
+            "SELECT COUNT(*), MAX(trade_date) FROM price").fetchone()
+        print(f"  발행주식수 {n_sh:,}종목, 종가 {n_pr:,}종목 (거래일 {td})")
+        for r in c.execute("SELECT pair, rate, as_of FROM fx ORDER BY pair"):
+            print(f"  {r['pair']} = {r['rate']:,.4f}   ({r['as_of']})")
+        both = c.execute(
+            "SELECT COUNT(*) FROM company c JOIN price p ON p.code=c.code "
+            "WHERE c.shares > 0 AND p.close_twd > 0").fetchone()[0]
+        print(f"  시총 계산 가능: {both:,}종목")
+    except sqlite3.OperationalError as e:
+        print(f"  (아직 없음: {e})")
+
     print("\ndisclosure (발표일) tracking:")
     tot = c.execute("SELECT COUNT(*) FROM disclosure").fetchone()[0]
     rev_tot = c.execute("SELECT COUNT(*) FROM revenue").fetchone()[0]
@@ -895,6 +1052,8 @@ def main(argv=None) -> int:
                     help="refresh the company master (code/中文名/English abbr/market) "
                          "and exit; revenue is left alone. Monthly is plenty.")
     ap.add_argument("--no-api", action="store_true", help="skip the current-month JSON APIs")
+    ap.add_argument("--no-price", action="store_true",
+                    help="skip the daily close / FX fetch used for market cap")
     ap.add_argument("--no-mops", action="store_true", help="skip the Big5 history pages")
     ap.add_argument("--no-cache", action="store_true", help="ignore raw_cache/")
     ap.add_argument("--sleep", type=float, default=0.6, help="seconds between requests")
@@ -969,6 +1128,20 @@ def main(argv=None) -> int:
         st = upsert(conn, rows)
         merge(st)
         print(f"    -> {fmt(st)}")
+
+    if not args.no_price:
+        print("\n[3] 종가 · 환율 (시가총액용)")
+        prices = fetch_prices(http)
+        if prices:
+            with conn:
+                conn.executemany(PRICE_UPSERT, prices)
+        fx = fetch_fx(http)
+        if fx:
+            with conn:
+                conn.executemany(
+                    "INSERT INTO fx (pair, rate, as_of, fetched_at) VALUES (?,?,?,?) "
+                    "ON CONFLICT(pair) DO UPDATE SET rate=excluded.rate, "
+                    "as_of=excluded.as_of, fetched_at=excluded.fetched_at", fx)
 
     set_meta(conn,
              last_fetch=datetime.now(timezone.utc).isoformat(timespec="seconds"),
