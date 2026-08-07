@@ -1,26 +1,62 @@
 @echo off
-REM ---------------------------------------------------------------------------
-REM publish.bat -- deploy dashboard.html to the gh-pages branch.
+REM ===========================================================================
+REM  publish.bat -- deploy dashboard.html to gh-pages.
 REM
-REM NOTE: this file must stay ASCII-only. cmd.exe reads .bat files in the system
-REM OEM codepage, not UTF-8, so non-ASCII comments get parsed as commands.
+REM  DEPLOYMENT IS THE SERVER'S JOB NOW. Use run.bat, which asks GitHub
+REM  Actions to rebuild and publish. This script exists for the case where
+REM  the server itself is broken.
 REM
-REM The point: never accumulate commits.
-REM   The dashboard is a single 2.5MB HTML that changes completely every day.
-REM   git cannot delta-compress that, so committing daily would leave
-REM   2.5MB x 365 = ~900MB permanently in the repo. Instead we build a brand new
-REM   repo in a temp folder with exactly one commit and force-push it, so the
-REM   remote gh-pages branch always holds precisely one commit.
+REM  Why it is guarded: this script only COPIES dashboard.html -- it never
+REM  builds it. Run it on its own and it happily publishes whatever stale
+REM  file is lying around, silently replacing a fresh server build with an
+REM  older one. That already happened once: a local build at 09:23 pushed a
+REM  dashboard that predated the timeline feature.
 REM
-REM Working in a temp folder also keeps the main repo's index and working tree
-REM untouched -- checking out an orphan branch in place would make every file in
-REM the project folder vanish and reappear.
-REM ---------------------------------------------------------------------------
+REM  Two locks, because an age-based check was not enough -- a 2.5-hour-old
+REM  local build still overwrote a 20-minute-old server build:
+REM    1. it does nothing at all without --force
+REM    2. even with --force it compares the local build time against what is
+REM       LIVE right now, and refuses if the deployed one is newer
+REM
+REM  NOTE: this file must stay ASCII-only. cmd.exe reads .bat files in the
+REM  system OEM codepage, not UTF-8, so non-ASCII text is parsed as commands.
+REM ===========================================================================
 setlocal
 cd /d "%~dp0"
 
+if /i not "%~1"=="--force" (
+  echo.
+  echo ============================================================
+  echo  publish.bat is disabled for routine use.
+  echo.
+  echo  Deployment belongs to the GitHub server now. This script
+  echo  only COPIES dashboard.html, so running it by hand pushes
+  echo  whatever old file is sitting here and silently replaces a
+  echo  newer server build. That has already happened twice.
+  echo.
+  echo  To update the site:   run.bat
+  echo  To override anyway:   publish.bat --force
+  echo ============================================================
+  echo.
+  exit /b 1
+)
+
 if not exist "dashboard.html" (
-  echo [publish] dashboard.html not found -- run build first.
+  echo [publish] dashboard.html not found -- nothing to deploy.
+  echo [publish] The server builds and publishes on its own; use run.bat.
+  exit /b 1
+)
+
+where python >nul 2>nul || (
+  echo [publish] python not found, cannot compare against the live site.
+  exit /b 1
+)
+python "%~dp0check_fresh.py" "%~dp0dashboard.html"
+if errorlevel 1 (
+  echo.
+  echo [publish] REFUSING -- the deployed dashboard is newer than this one.
+  echo [publish] Use run.bat to have the server rebuild.
+  echo.
   exit /b 1
 )
 
@@ -45,7 +81,7 @@ git init -q -b gh-pages || (popd & exit /b 1)
 git config user.name "CBturbomax"
 git config user.email "cbpark@wisdomasset.co.kr"
 git add -A || (popd & exit /b 1)
-git commit -q -m "dashboard %DATE% %TIME%" || (popd & exit /b 1)
+git commit -q -m "dashboard (local) %DATE% %TIME%" || (popd & exit /b 1)
 git remote add origin "%ORIGIN%" || (popd & exit /b 1)
 git push -q --force origin gh-pages
 set RC=%ERRORLEVEL%
@@ -56,5 +92,5 @@ if not "%RC%"=="0" (
   echo [publish] push failed with exit %RC%
   exit /b %RC%
 )
-echo [publish] deployed OK
+echo [publish] deployed OK ^(local build^)
 exit /b 0
