@@ -14,6 +14,7 @@ Sections, top to bottom:
   4. 그룹 YoY 히트맵 -- BoM group x 24 months, like-for-like YoY
   5. 변곡 점검      -- 역성장 / 시퀀셜 둔화 / 성장 지속
   6. 종목 차트      -- one hand-drawn SVG per BoM stock, grouped by BoM layer
+  (렌더 순서는 render() 참조: 차트/히트맵/변곡/조기공시/타임라인/표/movers)
 
 Usage:
     python build.py
@@ -214,13 +215,22 @@ def filing_deadline(ym: str) -> tuple[str, bool]:
     return d.isoformat(), rolled
 
 
-def load_disclosure(conn, ym: str) -> dict:
-    """code -> first_seen_date for one month. Absent = 발표일 미상."""
+def load_disclosure(conn, ym: str) -> tuple[dict, dict]:
+    """(date, ts) 두 dict. 없는 코드 = 발표일 미상.
+
+    ts는 KST ISO8601이다 (fetch.py가 항상 +09:00로 적는다).
+    """
+    dates, stamps = {}, {}
     try:
-        return {r["code"]: r["first_seen_date"] for r in conn.execute(
-            "SELECT code, first_seen_date FROM disclosure WHERE ym=?", (ym,))}
+        for r in conn.execute(
+            "SELECT code, first_seen_date, first_seen_ts FROM disclosure WHERE ym=?",
+            (ym,)
+        ):
+            dates[r["code"]] = r["first_seen_date"]
+            stamps[r["code"]] = r["first_seen_ts"]
     except sqlite3.OperationalError:
-        return {}
+        pass
+    return dates, stamps
 
 
 def load_disclosure_all(conn, codes: list[str]) -> dict:
@@ -700,6 +710,24 @@ svg.ch .ct {{ font-size:16px; fill:var(--mute); }}
 svg.ch rect[fill="{ACCENT2}"] {{ cursor:crosshair; }}
 .chk.off {{ opacity:.4; }}
 
+/* --- 발표 타임라인 --- */
+.tlsum {{ font-size:19px; color:var(--mute); }}
+.tlsum b {{ color:var(--fg); font-size:21px; }}
+.tlsum .sep {{ margin:0 10px; opacity:.45; }}
+td.tlts {{ color:var(--a1); font-weight:700; font-variant-numeric:tabular-nums; }}
+/* 부품군 종목은 배경으로 구분한다 -- 이 행들이 실제로 보는 대상이다 */
+table tbody tr.isbom {{ background:#16212b; }}
+table tbody tr.isbom:nth-child(even) {{ background:#18242f; }}
+table tbody tr.isbom td.pin {{ background:inherit; }}
+table tbody tr.isbom:hover {{ background:#1f2e3a; }}
+details.unf {{
+  margin-top:14px; background:var(--panel); border:1px solid var(--line);
+  border-radius:10px; padding:12px 16px;
+}}
+details.unf summary {{ cursor:pointer; font-size:19px; color:#c9d6e0; }}
+details.unf summary b {{ color:var(--a3); }}
+details.unf .scroll {{ margin-top:12px; max-height:420px; }}
+
 /* --- section 4 heatmap --- */
 .hscroll {{ overflow-x:auto; border:1px solid var(--line); border-radius:10px; }}
 table.hm {{ border-collapse:separate; border-spacing:0; font-variant-numeric:tabular-nums; }}
@@ -932,6 +960,94 @@ def render_pending(pending, prows, ref_ym, it_total, n=1):
                 f'<td class="l biz" data-v="{esc(r["biz"])}">{esc(r["biz"])}</td>'
                 f'</tr>')
         parts.append("</tbody></table></div>")
+    return "\n".join(parts)
+
+
+def render_timeline(rows, pend, ref_ym, sec=5):
+    """진행 중인 달의 발표 타임라인. 최신 감지순."""
+    if not pend:
+        return ""
+    ym, stamps, dates = pend["ym"], pend["stamps"], pend["dates"]
+    vals, dl = pend["vals"], pend["deadline"]
+    lab = f"{ym[2:4]}/{ym[5:7]}"
+
+    by_code = {r["code"]: r for r in rows}
+    filed, unfiled = [], []
+    for r in rows:
+        v = vals.get(r["code"])
+        (filed if v is not None else unfiled).append(r)
+
+    def ts_key(r):
+        # 발표시각을 모르는 건(추적 이전 적재분) 맨 아래로
+        return stamps.get(r["code"]) or ""
+    filed.sort(key=lambda r: (ts_key(r), r["rev_now"] or 0), reverse=True)
+    unfiled.sort(key=lambda r: r["rev_now"] or 0, reverse=True)
+
+    newest = max((s for s in stamps.values() if s), default=None)
+    newest_txt = f"{newest[5:10]} {newest[11:16]} KST" if newest else "아직 없음"
+    n_bom_filed = sum(1 for r in filed if r["bom_group"])
+
+    parts = [
+        f'<h2><span class="n">{sec}</span>발표 타임라인 &mdash; {esc(ym)}</h2>',
+        '<div class="tools">'
+        f'<span class="tlsum">IT <b>{len(filed)}</b> / {len(rows)} 발표'
+        f'<span class="sep">·</span>부품군 <b>{n_bom_filed}</b> / '
+        f'{sum(1 for r in rows if r["bom_group"])}'
+        f'<span class="sep">·</span>마감 <b>{esc(dl[5:7])}/{esc(dl[8:])}</b>'
+        f'<span class="sep">·</span>마지막 감지 <b>{esc(newest_txt)}</b></span>'
+        '<label class="chk"><input type="checkbox" id="tlBom">부품군만</label>'
+        '</div>',
+        '<div class="scroll"><table id="tTL"><thead><tr>'
+        + th("발표시각(KST)", "l") + th("코드", "l pin") + th("한글명", "l")
+        + th("부품군", "l") + th("당월매출", "", "백만 NTD")
+        + th("MoM%") + th("YoY%")
+        + '</tr></thead><tbody>']
+
+    for r in filed:
+        g = r["bom_group"] or ""
+        ts = stamps.get(r["code"])
+        shown = f"{ts[5:10]} {ts[11:16]}" if ts else "&mdash;"
+        mom = pct(vals[r["code"]], r["rev"].get(shift_ym(ym, -1)))
+        yoy = pct(vals[r["code"]], r["rev"].get(shift_ym(ym, -12)))
+        parts.append(
+            f'<tr data-bom="{esc(g)}"{" class=isbom" if g else ""}>'
+            f'<td class="l tlts" data-v="{esc(ts or "")}">{shown}</td>'
+            f'<td class="l pin code" data-v="{esc(r["code"])}">{esc(r["code"])}</td>'
+            f'<td class="l" data-v="{esc(r["name_kr"])}">{name_cell(r)}</td>'
+            f'<td class="l bom" data-v="{esc(g)}">{esc(g)}</td>'
+            f'<td class="rev" data-v="{vals[r["code"]]}">{mn(vals[r["code"]])}</td>'
+            f'<td class="{cls(mom)}" data-v="{sort_key(mom)}">{pc(mom)}</td>'
+            f'<td class="{cls(yoy)}" data-v="{sort_key(yoy)}">{pc(yoy)}</td>'
+            f'</tr>')
+    parts.append("</tbody></table></div>")
+
+    # 아직 안 낸 곳은 접어둔다. 마감이 다가올수록 이 목록이 본론이 된다.
+    parts.append(
+        f'<details class="unf"><summary>아직 발표하지 않은 <b>{len(unfiled)}</b>종목 '
+        f'(부품군 {sum(1 for r in unfiled if r["bom_group"])}종목 포함)</summary>'
+        '<div class="scroll"><table><thead><tr>'
+        + th("코드", "l") + th("한글명", "l") + th("부품군", "l")
+        + th(f"{esc(ref_ym)} 매출", "", "완결월 기준 규모")
+        + '</tr></thead><tbody>')
+    for r in unfiled:
+        g = r["bom_group"] or ""
+        parts.append(
+            f'<tr{" class=isbom" if g else ""}>'
+            f'<td class="l code">{esc(r["code"])}</td>'
+            f'<td class="l">{name_cell(r)}</td>'
+            f'<td class="l bom">{esc(g)}</td>'
+            f'<td class="rev">{mn(r["rev_now"])}</td></tr>')
+    parts.append("</tbody></table></div></details>")
+
+    parts.append(
+        '<div class="note fn">'
+        '· <b>발표시각은 이 시스템이 처음 감지한 시각이며, 회사의 실제 신고 '
+        '시각이 아닙니다.</b> 폴링 주기(공시기간 1시간, 평시 6시간)만큼 늦게 '
+        '잡힐 수 있습니다'
+        '<br>· 추적은 2026-08부터 시작해 그 이전 데이터는 <b>&mdash;</b>로 '
+        '표시됩니다'
+        '<br>· 시각은 한국시간(KST)입니다. 대만은 1시간 느립니다'
+        '</div>')
     return "\n".join(parts)
 
 
@@ -1987,6 +2103,19 @@ function wireNumToggle(nMonths){
   }
   cb.addEventListener('change', run); run();
 }
+// 타임라인의 [부품군만] 토글
+function wireTimeline(){
+  var cb = document.getElementById('tlBom'), t = document.getElementById('tTL');
+  if (!cb || !t) return;
+  var rows = Array.prototype.slice.call(t.tBodies[0].rows);
+  function run(){
+    var only = cb.checked;
+    rows.forEach(function(r){
+      r.classList.toggle('hide', only && !r.dataset.bom);
+    });
+  }
+  cb.addEventListener('change', run); run();
+}
 // heatmap tabs: swap the grid in place, and swap the footnotes with it
 function wireHeatTabs(){
   var tabs = document.querySelectorAll('.tabs .tab');
@@ -2060,8 +2189,9 @@ def render(rows, prows, ref_ym, pending, stats, meta) -> str:
 {render_heatmap(rows, ref_ym, meta["heat_months"], sec=2)}
 {render_inflection(rows, ref_ym, sec=3)}
 {render_pending(pending, prows, ref_ym, it_total, n=4)}
-{render_table(rows, ref_ym, n=5, clickable=meta["table_clickable"], pend=meta["pend"])}
-{render_movers(rows, ref_ym, sec=6)}
+{render_timeline(rows, meta["pend"], ref_ym, sec=5)}
+{render_table(rows, ref_ym, n=6, clickable=meta["table_clickable"], pend=meta["pend"])}
+{render_movers(rows, ref_ym, sec=7)}
 {MODAL_HTML}
 <footer>
 출처: TWSE t187ap05_L / TPEx mopsfin_t187ap05_O / MOPS t21sc03
@@ -2079,7 +2209,8 @@ YoY·MoM·누계YoY는 build 시점에 원본 절대금액에서 매번 재계�
 {JS}
 {MODAL_JS.replace("__LBL_H__", str(LBL_H)).replace("__LBL_FS__", str(LBL_FS)).replace("__LBL_ZIG__", str(LBL_ZIG))}
 wire('tAll'); wire('tPend');
-wireModal(); wireMomToggle(); wireHeatTabs();
+wire('tTL');
+wireModal(); wireMomToggle(); wireHeatTabs(); wireTimeline();
 wireNumToggle({meta["n_months"]});
 wireFilters({{table:'tAll', q:'q', ind:'fInd', mkt:'fMkt', bom:'fBom',
              small:'fSmall', bomOnly:'fBomOnly', unfiled:'fUnfiled', count:'cnt',
@@ -2187,10 +2318,10 @@ def main(argv=None) -> int:
     pend = None
     if pend_ym:
         p_rev, p_cum = load_pending_values(conn, pend_ym, all_codes)
-        p_dates = load_disclosure(conn, pend_ym)
+        p_dates, p_stamps = load_disclosure(conn, pend_ym)
         dl, rolled = filing_deadline(pend_ym)
         pend = {"ym": pend_ym, "vals": p_rev, "cum": p_cum, "dates": p_dates,
-                "deadline": dl, "rolled": rolled}
+                "stamps": p_stamps, "deadline": dl, "rolled": rolled}
         dated = sum(1 for c in p_rev if p_dates.get(c))
         print(f"  in-progress {pend_ym}        : {len(p_rev)} filed of {len(rows)}"
               f"  ({dated} with a recorded 발표일)  마감 {dl}"

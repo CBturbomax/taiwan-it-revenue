@@ -6,13 +6,22 @@ name: update dashboard
 #
 # 대만 공시는 익월 10일 마감이고 대만 업무시간(UTC+8)에 들어온다.
 # UTC 02/06/10/14시 = 대만 10/14/18/22시.
+# 대만 공시 마감은 익월 10일이라 1~10일에 신고가 몰린다. 그 기간엔 촘촘히,
+# 나머지 기간엔 드물게 돈다. cron은 UTC이고 대만은 UTC+8.
+#
+#   1~10일   UTC 00~12시 매시간 = 대만 08~20시 매시간  (13회/일)
+#   11일~    UTC 02/06/10/14시  = 대만 10/14/18/22시   (4회/일)
+#
+# 날짜 필드를 갈라놔야 1~10일에 두 스케줄이 겹치지 않는다.
 on:
   schedule:
-    - cron: "0 2,6,10,14 * * *"
+    - cron: "0 0-12 1-10 * *"
+    - cron: "0 2,6,10,14 11-31 * *"
   workflow_dispatch:        # Actions 탭에서 수동 실행 버튼
 
 permissions:
   contents: write           # gh-pages 브랜치에 push
+  actions: write            # 오래된 캐시 정리
 
 concurrency:
   group: update-dashboard
@@ -167,6 +176,24 @@ jobs:
             "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
             gh-pages
           echo "published"
+
+      # 실행마다 새 캐시 키가 생긴다(불변이라 덮어쓸 수 없음). 공시 기간엔
+      # 하루 13개씩 쌓여 저장소 캐시 한도(10GB)를 향해 달린다. 최근 것만 남긴다.
+      - name: Prune old caches
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          keep=8
+          ids=$(gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                  --json id,createdAt \
+                  --jq "sort_by(.createdAt) | reverse | .[$keep:] | .[].id")
+          n=0
+          for id in $ids; do
+            gh cache delete "$id" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && n=$((n+1))
+          done
+          echo "오래된 캐시 $n개 삭제 (최근 $keep개 유지)"
 
       - name: Summary
         if: always()

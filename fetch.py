@@ -39,7 +39,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +80,10 @@ SOURCE_PRIORITY = {"mops": 3, "twse-api": 2, "tpex-api": 2}
 # 발표일(disclosure)을 기록할지. 일상 갱신에서만 켠다 -- main()이 정한다.
 # 백필이나 명시적 기간 지정은 이력 적재이므로 관측 시각에 의미가 없다.
 RECORD_DISCLOSURE = True
+
+# 발표일은 항상 한국시간으로 적는다. 이제 GitHub 서버(UTC)가 유일한 기록자라
+# 실행 환경의 로컬 시간에 맡기면 보는 사람 기준과 어긋난다.
+KST = timezone(timedelta(hours=9))
 
 RE_INDUSTRY = re.compile(r"產業別[:：]\s*(.+)")
 RE_CODE = re.compile(r"^[0-9]{4,6}$")
@@ -566,8 +570,8 @@ CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS disclosure (
     code            TEXT NOT NULL,
     ym              TEXT NOT NULL,          -- 'YYYY-MM' (Gregorian)
-    first_seen_date TEXT,                   -- 'YYYY-MM-DD' local
-    first_seen_ts   TEXT,                   -- ISO8601 local with offset
+    first_seen_date TEXT,                   -- 'YYYY-MM-DD' KST
+    first_seen_ts   TEXT,                   -- ISO8601 KST (+09:00)
     source          TEXT,                   -- 'api' | 'mops'
     PRIMARY KEY (code, ym)
 );
@@ -693,7 +697,7 @@ def upsert(conn: sqlite3.Connection, rows: list[dict]) -> dict:
             existing[(row["code"], row["ym"])] = row
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    local = datetime.now().astimezone()
+    kst = datetime.now(KST)
     revisions, writable, first_seen = [], [], []
     for r in rows:
         old = existing.get((r["code"], r["ym"]))
@@ -706,8 +710,8 @@ def upsert(conn: sqlite3.Connection, rows: list[dict]) -> dict:
             # 둔갑한다 (빈 DB에서 백필한 서버에서 실제로 92,875건이 그렇게 됐다).
             if RECORD_DISCLOSURE:
                 first_seen.append((r["code"], r["ym"],
-                                   local.date().isoformat(),
-                                   local.isoformat(timespec="seconds"),
+                                   kst.date().isoformat(),
+                                   kst.isoformat(timespec="seconds"),
                                    "mops" if (r["source"] or "").startswith("mops")
                                    else "api"))
             continue
