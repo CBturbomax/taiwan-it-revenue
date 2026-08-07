@@ -866,11 +866,8 @@ table.hm {{ border-collapse:separate; border-spacing:0; width:100%;
            font-variant-numeric:tabular-nums; }}
 table.hm th.hl {{
   position:sticky; left:0; z-index:4; background:#1a222b;
-  /* 가장 긴 이름('메모리 모듈/스토리지')이 23px에서 한 줄에 들어가는 폭.
-     줄바꿈이 나면 그 행만 두 배 높이가 되어 격자가 어긋난다. */
-  min-width:280px; max-width:280px; text-align:left; padding:12px 14px;
-  font-size:23px; font-weight:700; cursor:pointer;
-  white-space:nowrap; overflow:hidden;
+  min-width:250px; max-width:250px; text-align:left; padding:9px 12px;
+  font-size:19px; font-weight:700; cursor:pointer;
   border-bottom:1px solid var(--line); border-right:2px solid #2b3742;
 }}
 table.hm tbody th.hl:hover {{ background:#243141; color:var(--a1); }}
@@ -887,22 +884,22 @@ table.hm thead th.hl {{
 table.hm .hsub {{ display:block; font-size:15px; font-weight:400; color:var(--mute); }}
 table.hm th.hmth {{
   position:sticky; top:0; z-index:5; background:#1a222b; color:#dce7ef;
-  font-size:20px; font-weight:600; padding:11px 5px; min-width:56px;
+  font-size:15px; font-weight:600; padding:8px 4px; min-width:42px;
   text-align:center; cursor:default; border-bottom:2px solid #2b3742;
 }}
 /* the newest column is the complete month everything else is anchored to */
 table.hm th.hmth.refm {{
-  background:#2b3742; color:var(--a1); font-size:21px; font-weight:800;
+  background:#2b3742; color:var(--a1); font-size:17px; font-weight:800;
   border-left:2px solid var(--a1);
 }}
 table.hm th.hmth.refm .rtag {{
-  display:block; font-size:13px; font-weight:600; color:var(--a1); letter-spacing:0;
+  display:block; font-size:12px; font-weight:600; color:var(--a1); letter-spacing:0;
 }}
-table.hm td.hc.sat {{ font-weight:900; }}
+table.hm td.hc.sat {{ font-weight:800; }}
 .satlegend {{ color:#fff; font-weight:800; }}
 table.hm td.hc {{
-  position:relative; text-align:center; padding:14px 5px; min-width:56px;
-  font-size:23px; font-weight:800; border-right:1px solid #0f1419;
+  position:relative; text-align:center; padding:9px 4px; min-width:42px;
+  font-size:17px; font-weight:700; border-right:1px solid #0f1419;
   border-bottom:1px solid #0f1419;
 }}
 /* partial like-for-like sum */
@@ -913,8 +910,8 @@ table.hm td.hc.part::after {{
 /* 단계 구분 행: 셀이 표 전체 폭이라 그대로 두면 라벨이 왼쪽으로 흘러 나간다.
    글자만 따로 왼쪽에 고정한다. */
 table.hm tr.stg td {{
-  background:#1a2129; color:var(--a1); font-size:20px; font-weight:700;
-  padding:9px 14px; letter-spacing:1px;
+  background:#1a2129; color:var(--a1); font-size:17px; font-weight:700;
+  padding:7px 12px; letter-spacing:1px;
 }}
 table.hm tr.stg .stgl {{
   position:sticky; left:12px; z-index:4; display:inline-block;
