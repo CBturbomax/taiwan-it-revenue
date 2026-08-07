@@ -34,9 +34,11 @@ top150.py
 industries.py
 cloud.py
 cumdiag*.py
-check*.py
 enc.py
 gen_groups.py
+# check*.py 로 뭉뚱그리면 정식 도구인 check_ascii.py까지 걸린다
+checkcum.py
+check3.py
 
 # 파이썬
 *.pyc
