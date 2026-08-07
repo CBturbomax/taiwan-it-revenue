@@ -525,6 +525,28 @@ def name_cell(rec, with_biz: bool = False) -> str:
     return f'<span class="nm"{tip_attr}>{kr}</span>{en_html}'
 
 
+def charted_codes(rows) -> set[str]:
+    """차트 카드가 실제로 그려지는 코드.
+
+    render_charts와 같은 규칙(부품군 코드 중 데이터가 있는 것)이라 두 곳이
+    어긋날 수 없다. 타임라인 949종목 가운데 차트가 있는 건 113종목뿐이므로,
+    종목명 클릭이 '차트로 이동'인지 '상세 모달'인지 미리 알려줘야 한다.
+    """
+    have = {r["code"] for r in rows}
+    return {c for c in bom_groups.all_codes() if c in have}
+
+
+def jump_cell(rec, has_chart: bool) -> str:
+    """종목명 셀. 차트가 있으면 그 카드로 스크롤, 없으면 상세 모달.
+
+    아이콘은 CSS가 그린다(.jump::before). 949행에 마크업을 넣으면 수십 KB다.
+    """
+    k = "jump" if has_chart else "jump nochart"
+    return (f'<td class="l nmc" data-v="{esc(rec["name_kr"])}">'
+            f'<span class="{k}" data-code="{esc(rec["code"])}">'
+            f'{name_cell(rec)}</span></td>')
+
+
 def name_plain(rec) -> str:
     """Everything the search box should match: 한글 / 영문 / 한자."""
     bits = [rec.get("name_kr") or "", rec.get("name") or "", rec.get("name_en") or ""]
@@ -721,8 +743,9 @@ svg.ch .lbl.momlbl .lbt {{ fill:{ACCENT}; }}
 table.clickable tbody tr {{ cursor:pointer; }}
 
 /* --- monthly detail modal --- */
+/* 부품군 모달(.gmback, 55) 위에서 열릴 수 있으므로 더 높다 */
 .mdback {{
-  position:fixed; inset:0; z-index:50; background:rgba(4,8,12,.78);
+  position:fixed; inset:0; z-index:60; background:rgba(4,8,12,.78);
   display:flex; align-items:center; justify-content:center; padding:24px;
 }}
 .mdback[hidden] {{ display:none; }}
@@ -825,41 +848,61 @@ details.unf .scroll {{ margin-top:12px; max-height:420px; }}
    세로/가로 양쪽으로 스크롤되는 상자를 만들고, 날짜 헤더는 위에, 부품군 이름은
    왼쪽에 고정한다. sticky 셀은 배경이 투명하면 뒤 행이 그대로 비쳐 지나가므로
    전부 명시적 배경색을 준다. z-index 층: 모서리 6 > 열헤더 5 > 행헤더/단계 4. */
+/* 이 섹션만 wrap(1680px)을 뚫고 화면 폭을 쓴다. 24열짜리 격자는 여백보다
+   칸 폭이 중요하다. 100vw는 세로 스크롤바를 포함하므로 40px 빼서 가로
+   스크롤바가 새로 생기는 것을 막는다. */
+.hmwide {{
+  width:calc(100vw - 40px); max-width:calc(100vw - 40px);
+  margin-left:calc(50% - 50vw + 20px);
+}}
+.hmwide .note {{ max-width:1500px; }}
 .hscroll {{
-  max-height:680px; overflow:auto;
+  max-height:75vh; overflow:auto;
   border:1px solid var(--line); border-radius:10px;
 }}
-table.hm {{ border-collapse:separate; border-spacing:0; font-variant-numeric:tabular-nums; }}
+/* width:100% 라서 열이 적을수록 칸이 넓어진다. 열이 많아 min-width 합이 화면을
+   넘으면 그때부터 가로 스크롤이고, 부품군 열은 계속 왼쪽에 붙어 있는다. */
+table.hm {{ border-collapse:separate; border-spacing:0; width:100%;
+           font-variant-numeric:tabular-nums; }}
 table.hm th.hl {{
   position:sticky; left:0; z-index:4; background:#1a222b;
-  min-width:250px; max-width:250px; text-align:left; padding:9px 12px;
-  font-size:19px; font-weight:700; cursor:default;
+  /* 가장 긴 이름('메모리 모듈/스토리지')이 23px에서 한 줄에 들어가는 폭.
+     줄바꿈이 나면 그 행만 두 배 높이가 되어 격자가 어긋난다. */
+  min-width:280px; max-width:280px; text-align:left; padding:12px 14px;
+  font-size:23px; font-weight:700; cursor:pointer;
+  white-space:nowrap; overflow:hidden;
   border-bottom:1px solid var(--line); border-right:2px solid #2b3742;
 }}
+table.hm tbody th.hl:hover {{ background:#243141; color:var(--a1); }}
+table.hm tbody th.hl::after {{
+  content:"\\203A"; float:right; color:#4d5b67; font-weight:400; margin-left:6px;
+}}
+table.hm tbody th.hl:hover::after {{ color:var(--a1); }}
 /* 좌상단 모서리 -- 양방향 고정이라 가장 위에 있어야 한다 */
 table.hm thead th.hl {{
-  top:0; z-index:6; background:#1a222b;
+  top:0; z-index:6; background:#1a222b; cursor:default;
   border-bottom:2px solid #2b3742;
 }}
+/* 'N종목 · 합계'는 보조 정보라 키우지 않는다 */
 table.hm .hsub {{ display:block; font-size:15px; font-weight:400; color:var(--mute); }}
 table.hm th.hmth {{
   position:sticky; top:0; z-index:5; background:#1a222b; color:#dce7ef;
-  font-size:15px; font-weight:600; padding:8px 4px; min-width:42px;
+  font-size:20px; font-weight:600; padding:11px 5px; min-width:56px;
   text-align:center; cursor:default; border-bottom:2px solid #2b3742;
 }}
 /* the newest column is the complete month everything else is anchored to */
 table.hm th.hmth.refm {{
-  background:#2b3742; color:var(--a1); font-size:17px; font-weight:800;
+  background:#2b3742; color:var(--a1); font-size:21px; font-weight:800;
   border-left:2px solid var(--a1);
 }}
 table.hm th.hmth.refm .rtag {{
-  display:block; font-size:12px; font-weight:600; color:var(--a1); letter-spacing:0;
+  display:block; font-size:13px; font-weight:600; color:var(--a1); letter-spacing:0;
 }}
-table.hm td.hc.sat {{ font-weight:800; }}
+table.hm td.hc.sat {{ font-weight:900; }}
 .satlegend {{ color:#fff; font-weight:800; }}
 table.hm td.hc {{
-  position:relative; text-align:center; padding:9px 4px; min-width:42px;
-  font-size:17px; font-weight:700; border-right:1px solid #0f1419;
+  position:relative; text-align:center; padding:14px 5px; min-width:56px;
+  font-size:23px; font-weight:800; border-right:1px solid #0f1419;
   border-bottom:1px solid #0f1419;
 }}
 /* partial like-for-like sum */
@@ -870,8 +913,8 @@ table.hm td.hc.part::after {{
 /* 단계 구분 행: 셀이 표 전체 폭이라 그대로 두면 라벨이 왼쪽으로 흘러 나간다.
    글자만 따로 왼쪽에 고정한다. */
 table.hm tr.stg td {{
-  background:#1a2129; color:var(--a1); font-size:17px; font-weight:700;
-  padding:7px 12px; letter-spacing:1px;
+  background:#1a2129; color:var(--a1); font-size:20px; font-weight:700;
+  padding:9px 14px; letter-spacing:1px;
 }}
 table.hm tr.stg .stgl {{
   position:sticky; left:12px; z-index:4; display:inline-block;
@@ -908,6 +951,94 @@ table.hm tr.tiny th.hl {{ background:#151b21; color:#8b9aa6; }}
 .tab:last-child {{ border-radius:0 8px 8px 0; }}
 .tab:hover {{ color:var(--fg); }}
 .tab.on {{ background:var(--a3); color:#10161c; border-color:var(--a3); }}
+/* 기간 선택은 지표 탭과 다른 축이므로 색을 갈라 놓는다(노랑 = 절대/기간). */
+.pertabs {{ margin-left:10px; }}
+.pertabs .tab {{ font-size:17px; padding:7px 15px; }}
+.pertabs .tab.on {{ background:var(--a1); color:#10161c; border-color:var(--a1); }}
+
+/* --- 타임라인 -> 차트 점프 -------------------------------------------------
+   949행 전부에 아이콘 마크업을 넣으면 수십 KB라, 클래스 하나로 CSS가 그린다.
+   3칸짜리 막대그래프 = 차트 있음, 회색 점 = 차트 없음(상세 모달로 감). */
+.nmc .jump {{ cursor:pointer; }}
+.nmc .jump:hover .nm {{ color:var(--a3); text-decoration:underline; }}
+.nmc .jump::before {{
+  content:""; display:inline-block; width:12px; height:12px; margin-right:8px;
+  vertical-align:-1px;
+  background:
+    linear-gradient({ACCENT3},{ACCENT3}) 0    100%/3px 6px  no-repeat,
+    linear-gradient({ACCENT3},{ACCENT3}) 4.5px 100%/3px 12px no-repeat,
+    linear-gradient({ACCENT3},{ACCENT3}) 9px  100%/3px 9px  no-repeat;
+}}
+.nmc .jump.nochart::before {{
+  background:none; border-radius:50%; width:5px; height:5px;
+  background-color:#3f4b56; margin:0 11px 0 4px; vertical-align:2px;
+}}
+.nmc .jump.nochart:hover .nm {{ color:var(--a1); }}
+.cbox.jumped {{
+  border-color:var(--a3) !important;
+  box-shadow:0 0 0 3px rgba(237,125,49,.5), 0 10px 30px rgba(0,0,0,.5);
+}}
+.fab {{
+  position:fixed; right:26px; bottom:26px; z-index:40;
+  background:var(--a3); color:#10161c; border:0; border-radius:24px;
+  padding:14px 22px; font-size:19px; font-weight:800; font-family:inherit;
+  cursor:pointer; box-shadow:0 10px 28px rgba(0,0,0,.55);
+}}
+.fab[hidden] {{ display:none; }}
+.fab:hover {{ filter:brightness(1.1); }}
+
+/* --- 부품군 추이 모달 -------------------------------------------------------
+   종목 모달(.mdback)이 이 위에 겹쳐 열릴 수 있으므로 z-index를 낮게 둔다. */
+.gmback {{
+  position:fixed; inset:0; z-index:55; background:rgba(4,8,12,.8);
+  display:flex; align-items:center; justify-content:center; padding:20px;
+}}
+.gmback[hidden] {{ display:none; }}
+.gmbox {{
+  background:var(--panel); border:1px solid var(--line); border-radius:14px;
+  width:min(1560px,100%); max-height:94vh; display:flex; flex-direction:column;
+  box-shadow:0 24px 60px rgba(0,0,0,.65);
+}}
+.gmhead {{
+  display:flex; flex-wrap:wrap; align-items:baseline; gap:14px;
+  padding:16px 22px 12px; border-bottom:1px solid var(--line);
+}}
+.gmname {{ font-size:28px; font-weight:800; }}
+.gmstage {{
+  font-size:16px; color:var(--a1); border:1px solid #3d3a20;
+  border-radius:20px; padding:3px 12px;
+}}
+.gmfacts {{ font-size:19px; color:var(--mute); }}
+.gmfacts b {{ color:var(--fg); }}
+.gmbar {{
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:9px 22px; border-bottom:1px solid var(--line);
+}}
+.gmbody {{ overflow:auto; padding:6px 22px 20px; }}
+.gmck {{ font-size:18px; }}
+.gmck .sw {{
+  display:inline-block; width:22px; height:5px; border-radius:3px;
+}}
+.gmh3 {{
+  font-size:19px; font-weight:700; color:#c9d6e0; margin:16px 0 4px;
+  display:flex; align-items:baseline; gap:10px;
+}}
+.gmh3 span {{ font-size:16px; font-weight:400; color:var(--mute); }}
+svg.gc {{ width:100%; height:auto; display:block;
+          background:#0f1419; border:1px solid var(--line); border-radius:8px; }}
+svg.gc text {{ font-family:inherit; }}
+svg.gc .gax {{ font-size:15px; fill:var(--mute); }}
+svg.gc .gzl {{ stroke:#5a6874; stroke-width:1.4; stroke-dasharray:5 5; }}
+svg.gc .ggl {{ stroke:#1e2831; stroke-width:1; }}
+svg.gc .glb {{ font-size:15px; font-weight:700; text-anchor:middle; }}
+svg.gc .glbg {{ fill:rgba(10,15,20,.86); rx:2; }}
+table.gmtab {{ width:100%; margin-top:6px; }}
+table.gmtab thead th {{ background:#1b232b; cursor:pointer; font-size:18px; }}
+table.gmtab tbody td {{ font-size:19px; padding:9px 14px; }}
+table.gmtab tbody tr {{ cursor:pointer; }}
+table.gmtab tr.excl {{ opacity:.62; }}
+table.gmtab tr.excl td {{ font-style:italic; }}
+.exnote {{ color:var(--a2); font-size:16px; font-style:normal; margin-left:8px; }}
 
 /* --- section 5 inflection --- */
 .ihd {{
@@ -1059,15 +1190,16 @@ def render_pending(pending, prows, ref_ym, it_total, n=1, rows=None):
                      + th("사업", "l"))
         parts.append("</tr></thead><tbody>")
         by_code = {x["code"]: x for x in (rows or [])}
+        charted = charted_codes(rows or [])
         for r in prows:
             g = r["bom_group"] or ""
             rec = by_code.get(r["code"])
             qq = (qoq_pending(rec, r["ym"], r["rev_month_k"]) if rec else None)
             parts.append(
-                f'<tr>'
+                f'<tr data-code="{esc(r["code"])}" data-from="tPend">'
                 f'<td class="l pin code" data-v="{esc(r["code"])}">{esc(r["code"])}</td>'
-                f'<td class="l" data-v="{esc(r["name_kr"])}">{name_cell(r)}</td>'
-                f'<td class="l ind" data-v="{esc(r["industry_kr"])}" '
+                + jump_cell(r, r["code"] in charted)
+                + f'<td class="l ind" data-v="{esc(r["industry_kr"])}" '
                 f'title="{esc(r["industry"])}">{esc(r["industry_kr"])}</td>'
                 f'<td class="l bom" data-v="{esc(g)}">{esc(g)}</td>'
                 f'<td class="rev" data-v="{r["rev_month_k"]}">{mn(r["rev_month_k"])}</td>'
@@ -1157,6 +1289,7 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
         + th("QoQ%", "", "최근3개월 합 / 직전3개월 합 - 1")
         + '</tr></thead><tbody>']
 
+    charted = charted_codes(rows)
     for r in filed:
         g = r["bom_group"] or ""
         ts = stamps.get(r["code"])
@@ -1165,13 +1298,13 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
         yoy = pct(vals[r["code"]], r["rev"].get(shift_ym(ym, -12)))
         qq = qoq_pending(r, ym, vals[r["code"]])
         parts.append(
-            f'<tr data-bom="{esc(g)}" '
+            f'<tr data-bom="{esc(g)}" data-code="{esc(r["code"])}" data-from="tTL" '
             f'data-cap="{(r["cap"] or [0, 0])[1]:.4f}"'
             f'{" class=isbom" if g else ""}>'
             f'<td class="l tlts" data-v="{esc(ts or "")}">{shown}</td>'
             f'<td class="l pin code" data-v="{esc(r["code"])}">{esc(r["code"])}</td>'
-            f'<td class="l" data-v="{esc(r["name_kr"])}">{name_cell(r)}</td>'
-            f'<td class="l bom" data-v="{esc(g)}">{esc(g)}</td>'
+            + jump_cell(r, r["code"] in charted)
+            + f'<td class="l bom" data-v="{esc(g)}">{esc(g)}</td>'
             f'<td class="l cap" data-v="{(r["cap"] or [0])[0]:.4f}">'
             f'{fmt_cap(r["cap"])}</td>'
             f'<td class="rev" data-v="{vals[r["code"]]}">{mn(vals[r["code"]])}</td>'
@@ -1194,12 +1327,12 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
     for r in unfiled:
         g = r["bom_group"] or ""
         parts.append(
-            f'<tr data-bom="{esc(g)}" '
+            f'<tr data-bom="{esc(g)}" data-code="{esc(r["code"])}" data-from="tTL" '
             f'data-cap="{(r["cap"] or [0, 0])[1]:.4f}"'
             f'{" class=isbom" if g else ""}>'
             f'<td class="l code" data-v="{esc(r["code"])}">{esc(r["code"])}</td>'
-            f'<td class="l" data-v="{esc(r["name_kr"])}">{name_cell(r)}</td>'
-            f'<td class="l bom" data-v="{esc(g)}">{esc(g)}</td>'
+            + jump_cell(r, r["code"] in charted)
+            + f'<td class="l bom" data-v="{esc(g)}">{esc(g)}</td>'
             + (f'<td class="l cap" data-v="{(r["cap"] or [0])[0]:.4f}">'
                f'{fmt_cap(r["cap"])}</td>' if mc.get("cap") else "")
             + f'<td class="rev" data-v="{r["rev_now"]}">{mn(r["rev_now"])}</td></tr>')
@@ -1213,6 +1346,9 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
         '<br>· 추적은 2026-08부터 시작해 그 이전 데이터는 <b>&mdash;</b>로 '
         '표시됩니다'
         '<br>· 시각은 한국시간(KST)입니다. 대만은 1시간 느립니다'
+        '<br>· <b>종목명</b>을 누르면 해당 차트로 이동하고(막대 아이콘이 붙은 '
+        '부품군 종목만 차트가 있습니다), 차트가 없는 종목(회색 점)은 월별 '
+        '상세가 열립니다. <b>코드</b>를 누르면 언제나 월별 상세입니다'
         + (f'<br>· 시가총액 = 종가 x 보통주 발행주식수. <b>종가 기준일 '
            f'{esc(mc.get("date") or "?")}</b> (대만장 마감은 대만시간 13:30이라 '
            f'장중 실행이면 전일 종가입니다). 환율 기준 '
@@ -1714,6 +1850,7 @@ HEAT_CLIP_MOM = 25.0        # MoM 탭. YoY의 ±40을 그대로 쓰면 전부 �
 HEAT_CLIP_QOQ = 30.0        # 3개월 합 QoQ. MoM보다 진폭이 크고 YoY보다 작다.
 HEAT_ZERO_EPS = 0.5         # 정수 표기라 이 아래는 '0'으로 보고 회색
 SMALL_GROUP_K = 3_000_000   # 합계 3,000 백만 NTD 미만이면 노이즈 경고
+BENCH_KEY = "*"             # 벤치마크 행. 부품군 이름과 겹치지 않는 키.
 
 
 def _lerp(a, b, t):
@@ -1789,19 +1926,23 @@ def group_change(by_code: dict, members: list[str], ym: str, lag: int,
 
 
 def heat_table(by_code: dict, axis: list[str], ref_ym: str,
-               lag: int, clip: float, window: int = 1) -> str:
+               lag: int, clip: float, window: int = 1,
+               hide_first: int = 0) -> str:
     """One heatmap grid. (window, lag): (1,12) YoY / (1,1) MoM / (3,3) QoQ.
 
     All tabs share rows, row order, row labels and columns so that switching
     between them changes only the colour field -- that is the whole point of
     putting them in the same place.
+
+    hide_first개 열은 'hide'를 달고 나온다. 기간 버튼이 JS로 켜고 끄지만,
+    처음 그릴 때부터 맞는 폭이어야 48열이 잠깐 보였다 접히는 일이 없다.
     """
     if window > 1:
         cur_lbl, base_lbl = f"최근{window}개월", f"직전{window}개월"
     else:
         cur_lbl, base_lbl = "당월", ("전년" if lag == 12 else "전월")
 
-    def cell(d):
+    def cell(d, i):
         v = d["chg"]
         bg, fg, sat = heat_style(v, clip)
         if v is None:
@@ -1811,7 +1952,8 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
         else:
             txt = f"{v:+.0f}"
         klass = "hc" + (" part" if d["n_lfl"] < d["n_pool"] else "") \
-                     + (" " + sat if sat else "")
+                     + (" " + sat if sat else "") \
+                     + (" hide" if i < hide_first else "")
         tip = (f"부품군 {d['n_pool']}종목 중 {d['n_lfl']}종목 · "
                f"{cur_lbl} {mn(d['lfl_sum'])} → {base_lbl} {mn(d['lfl_sum_prev'])}"
                if d["n_lfl"] else "합산 가능한 종목 없음")
@@ -1820,17 +1962,19 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
         return (f'<td class="{klass}" style="background:{bg};color:{fg}" '
                 f'title="{esc(tip)}">{txt}</td>')
 
-    def row(label, sub, members, extra=""):
-        cells = [cell(group_change(by_code, members, ym, lag, window))
-                 for ym in axis]
-        return (f'<tr class="{extra}"><th class="hl">{esc(label)}'
+    def row(label, sub, members, extra="", key=""):
+        cells = [cell(group_change(by_code, members, ym, lag, window), i)
+                 for i, ym in enumerate(axis)]
+        return (f'<tr class="{extra}">'
+                f'<th class="hl" data-g="{esc(key or label)}">{esc(label)}'
                 f'<span class="hsub">{esc(sub)}</span></th>{"".join(cells)}</tr>')
 
     out = ['<div class="hscroll"><table class="hm"><thead><tr>',
            '<th class="hl">부품군</th>']
     for i, ym in enumerate(axis):
         last = i == len(axis) - 1
-        out.append(f'<th class="hmth{" refm" if last else ""}">'
+        out.append(f'<th class="hmth{" refm" if last else ""}'
+                   f'{" hide" if i < hide_first else ""}">'
                    f'{ym[2:4]}/{ym[5:7]}'
                    + ('<span class="rtag">기준월</span>' if last else "")
                    + '</th>')
@@ -1842,7 +1986,7 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
     b_now = group_change(by_code, bench, ref_ym, lag, window)
     out.append(row(f"부품군 {len(bom_groups.all_codes())} 합계",
                    f"모자 제외 {len(bench)} · {mn(b_now['total_sum'])}",
-                   bench, extra="bench"))
+                   bench, extra="bench", key=BENCH_KEY))
 
     for stage, gnames in bom_groups.STAGES.items():
         out.append(f'<tr class="stg"><td colspan="{len(axis) + 1}">'
@@ -1859,11 +2003,20 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
     return "".join(out)
 
 
-def render_heatmap(rows, ref_ym: str, n_months: int, sec=2):
+def render_heatmap(rows, ref_ym: str, n_months: int, sec=2, default_n: int = 24):
+    """n_months는 렌더하는 전체 열 수, default_n은 처음 보여줄 열 수.
+
+    기간 버튼(12/24/전체)은 표를 다시 만들지 않고 앞쪽 열을 감추기만 한다.
+    탭마다 표를 3벌 더 찍으면 마크업이 3배가 되고, 탭을 바꿀 때 기간이
+    초기화되는 문제도 생긴다.
+    """
     by_code = {r["code"]: r for r in rows}
     axis = months_axis(ref_ym, n_months)
+    default_n = min(default_n, n_months)
 
-    common = ('· 부품군 합계는 모자 이중계상 제거 기준입니다'
+    common = ('· <b>부품군 이름을 누르면</b> 그 부품군의 매출·증감률 추이와 '
+              '소속 종목이 열립니다 (← → 로 이웃 부품군 이동)'
+              '<br>· 부품군 합계는 모자 이중계상 제거 기준입니다'
               '<br>· 일부만 합산된 셀은 하단에 작은 점(·)이 붙습니다'
               f'<br>· 합계 {SMALL_GROUP_K // 1000:,} 백만 미만 부품군'
               '(행 라벨이 어두운 행)은 한두 종목이 전체를 좌우합니다')
@@ -1906,22 +2059,34 @@ def render_heatmap(rows, ref_ym: str, n_months: int, sec=2):
         '구조적으로 높게 나옵니다. <b>계절 패턴을 거스르는 칸이 실제 신호입니다.</b>'
         '</div>')
 
+    cut = n_months - default_n
+
+    def per(n, label):
+        on = " on" if n == default_n or (n == 0 and default_n == n_months) else ""
+        return f'<button class="tab per{on}" data-p="{n}">{label}</button>'
+
     return "\n".join([
+        '<section class="hmwide">',
         f'<h2><span class="n">{sec}</span>부품군 히트맵 '
-        f'<span class="meta">{len(bom_groups.GROUPS)}개 부품군 · 최근 {n_months}개월 '
-        f'({axis[0]} ~ {axis[-1]})</span>'
-        '<span class="tabs">'
+        f'<span class="meta" id="hmMeta" '
+        f'data-base="{len(bom_groups.GROUPS)}개 부품군">'
+        f'{len(bom_groups.GROUPS)}개 부품군</span>'
+        '<span class="tabs hmtabs">'
         '<button class="tab on" data-pane="yoy">YoY</button>'
         '<button class="tab" data-pane="mom">MoM</button>'
         '<button class="tab" data-pane="qoq">QoQ</button>'
-        '</span></h2>',
+        '</span>'
+        '<span class="tabs pertabs">'
+        + per(12, "12개월") + per(24, "24개월") + per(0, "전체")
+        + '</span></h2>',
         f'<div class="hmpane" data-pane="yoy">'
-        f'{heat_table(by_code, axis, ref_ym, 12, HEAT_CLIP)}</div>',
+        f'{heat_table(by_code, axis, ref_ym, 12, HEAT_CLIP, hide_first=cut)}</div>',
         f'<div class="hmpane" data-pane="mom" hidden>'
-        f'{heat_table(by_code, axis, ref_ym, 1, HEAT_CLIP_MOM)}</div>',
+        f'{heat_table(by_code, axis, ref_ym, 1, HEAT_CLIP_MOM, hide_first=cut)}</div>',
         f'<div class="hmpane" data-pane="qoq" hidden>'
-        f'{heat_table(by_code, axis, ref_ym, 3, HEAT_CLIP_QOQ, window=3)}</div>',
+        f'{heat_table(by_code, axis, ref_ym, 3, HEAT_CLIP_QOQ, window=3, hide_first=cut)}</div>',
         fn_yoy, fn_mom, fn_qoq,
+        '</section>',
     ])
 
 
@@ -2086,6 +2251,71 @@ def modal_payload(rows, codes: list[str], lo_ym: str, ref_ym: str,
     return payload, n
 
 
+def group_payload(rows, axis: list[str], ref_ym: str) -> tuple[str, int]:
+    """부품군 시계열 + 소속 종목, JSON 한 덩이.
+
+    ★ 숫자는 전부 heat_table이 쓰는 group_change/heatmap_members로 만든다.
+    모달에서 따로 계산하면 히트맵 칸과 모달 그래프가 갈라지고, 그건 어느 쪽이
+    맞는지 아무도 모르는 상태가 된다. 표시만 JS가 하고 값은 여기서 굳힌다.
+
+    23그룹 + 벤치마크 1행 × 48개월 × 4계열이라 30KB 정도다. 표를 미리 그리는
+    것보다 훨씬 싸고, 기간 버튼을 눌러도 다시 그릴 수 있다.
+    """
+    by_code = {r["code"]: r for r in rows}
+    r1 = lambda v: None if v is None else round(v, 1)
+
+    def block(members_all: list[str], members: list[str]) -> dict:
+        yoy, mom, qoq, tot = [], [], [], []
+        for ym in axis:
+            a = group_change(by_code, members, ym, 12)
+            yoy.append(r1(a["chg"]))
+            mom.append(r1(group_change(by_code, members, ym, 1)["chg"]))
+            qoq.append(r1(group_change(by_code, members, ym, 3, window=3)["chg"]))
+            tot.append(a["total_sum"] or None)
+        inside = set(members)
+        usd = jo = 0.0
+        mem = []
+        for c in members_all:
+            rec = by_code.get(c)
+            if rec is None:
+                continue
+            excl = c not in inside
+            if not excl and rec.get("cap"):
+                usd += rec["cap"][0]
+                jo += rec["cap"][1]
+            par = bom_groups.CONSOL_PARENT.get(c, "") if excl else ""
+            prec = by_code.get(par)
+            mem.append({"c": c, "k": rec["name_kr"], "e": rec.get("name_en") or "",
+                        "cap": fmt_cap(rec.get("cap")), "r": rec["rev_now"],
+                        "m": r1(rec["mom"]), "y": r1(rec["yoy"]),
+                        "q": r1(qoq_3m(rec, ref_ym)),
+                        "x": par, "xk": (prec["name_kr"] if prec else "")})
+        mem.sort(key=lambda x: (x["r"] is None, -(x["r"] or 0)))
+        return {"n": len(members_all), "nh": len(members),
+                "cap": fmt_cap((usd, jo)) if usd else "",
+                "sum": tot, "yoy": yoy, "mom": mom, "qoq": qoq, "mem": mem}
+
+    out, order = {}, []
+    bench = bom_groups.benchmark_members()
+    out[BENCH_KEY] = block(bom_groups.all_codes(), bench)
+    out[BENCH_KEY]["st"] = "전체"
+    out[BENCH_KEY]["nm"] = f"부품군 {len(bom_groups.all_codes())} 합계"
+    order.append(BENCH_KEY)
+    for stage, gnames in bom_groups.STAGES.items():
+        for g in gnames:
+            if g not in bom_groups.GROUPS:
+                continue
+            b = block(bom_groups.GROUPS[g], bom_groups.heatmap_members(g))
+            b["st"], b["nm"] = stage, g
+            out[g] = b
+            order.append(g)
+    j = lambda o: json.dumps(o, ensure_ascii=False, separators=(",", ":"))
+    payload = (f"const GAXIS={j(axis)};\n"
+               f"const GRP={j(out)};\n"
+               f"const GORDER={j(order)};\n")
+    return payload, len(order)
+
+
 MODAL_HTML = """
 <div id="mdBack" class="mdback" hidden>
   <div class="mdbox" role="dialog" aria-modal="true">
@@ -2195,7 +2425,9 @@ function openModal(code, list){
 }
 function closeModal(){
   document.getElementById('mdBack').hidden = true;
-  document.body.style.overflow = '';
+  // 부품군 모달 위에서 열렸던 것이면 그쪽이 아직 스크롤을 잠가야 한다
+  var g = document.getElementById('gmBack');
+  if (!g || g.hidden) document.body.style.overflow = '';
 }
 function mdStep(d){
   if (MD.list.length < 2) return;
@@ -2440,7 +2672,7 @@ function wireTimeline(capFloorJo){
 }
 // heatmap tabs: swap the grid in place, and swap the footnotes with it
 function wireHeatTabs(){
-  var tabs = document.querySelectorAll('.tabs .tab');
+  var tabs = document.querySelectorAll('.hmtabs .tab');
   if (!tabs.length) return;
   tabs.forEach(function(btn){
     btn.addEventListener('click', function(){
@@ -2450,6 +2682,341 @@ function wireHeatTabs(){
         p.hidden = (p.dataset.pane !== want);
       });
     });
+  });
+}
+"""
+
+# --------------------------------------------------------------------------- #
+# 타임라인 -> 차트 점프, 히트맵 기간 선택, 부품군 추이 모달
+# --------------------------------------------------------------------------- #
+GROUP_HTML = """
+<button id="backTL" class="fab" hidden></button>
+<div id="gmBack" class="gmback" hidden>
+  <div class="gmbox" role="dialog" aria-modal="true">
+    <div class="gmhead">
+      <span class="gmname"></span>
+      <span class="gmstage"></span>
+      <span class="gmfacts"></span>
+    </div>
+    <div class="gmbar">
+      <button class="mdnav" id="gmPrev" title="이전 부품군 (&larr;)">&#9664;</button>
+      <span class="mdpos" id="gmPos"></span>
+      <button class="mdnav" id="gmNext" title="다음 부품군 (&rarr;)">&#9654;</button>
+      <label class="chk gmck"><input type="checkbox" id="gcYoy" checked>
+        <span class="sw" style="background:__C_YOY__"></span>YoY</label>
+      <label class="chk gmck"><input type="checkbox" id="gcMom">
+        <span class="sw" style="background:__C_MOM__"></span>MoM</label>
+      <label class="chk gmck"><input type="checkbox" id="gcQoq" checked>
+        <span class="sw" style="background:__C_QOQ__"></span>QoQ</label>
+      <button class="mdx" id="gmClose" title="닫기 (ESC)">&#10005;</button>
+    </div>
+    <div class="gmbody">
+      <div class="gmh3">부품군 합계 매출 <span id="gmBarSub"></span></div>
+      <svg class="gc" id="gcBar" viewBox="0 0 1400 250"></svg>
+      <div class="gmh3">증감률 <span id="gmLineSub"></span></div>
+      <svg class="gc" id="gcLine" viewBox="0 0 1400 360"></svg>
+      <div class="gmh3">소속 종목 <span id="gmMemSub"></span></div>
+      <div id="gmTab"></div>
+    </div>
+  </div>
+</div>
+"""
+
+GROUP_JS = """
+/* ---- 타임라인/조기공시분 -> 차트 카드 점프 -------------------------------- */
+var JUMP = { y:null };
+function jumpToChart(code, fromId){
+  var fig = document.querySelector('.cbox[data-code="' + code + '"]');
+  if (!fig){ openModal(code, null); return; }        // 차트 없으면 상세로
+  JUMP.y = window.scrollY;
+  var fab = document.getElementById('backTL');
+  if (fab){
+    fab.textContent = '\\u2191 ' +
+      (fromId === 'tPend' ? '조기공시분' : '발표 타임라인') + '으로';
+    fab.hidden = false;
+  }
+  fig.scrollIntoView({behavior:'smooth', block:'center'});
+  fig.classList.add('jumped');
+  setTimeout(function(){ fig.classList.remove('jumped'); }, 2000);
+}
+function wireJumps(){
+  ['tTL','tTLU','tPend'].forEach(function(id){
+    var t = document.getElementById(id);
+    if (!t || !t.tBodies[0]) return;
+    var tb = t.tBodies[0];
+    tb.addEventListener('click', function(e){
+      var tr = e.target.closest('tr');
+      if (!tr || !tr.dataset.code) return;
+      var code = tr.dataset.code;
+      var j = e.target.closest('.jump');
+      if (j && !j.classList.contains('nochart')){
+        jumpToChart(code, tr.dataset.from || id);
+        return;
+      }
+      if (j || e.target.closest('td.code')) openModal(code, visibleCodes(tb));
+    });
+    // 커서·툴팁은 여기서 붙인다. 949행에 title 속성을 찍으면 수십 KB다.
+    Array.prototype.forEach.call(tb.rows, function(tr){
+      var j = tr.querySelector('.jump'), c = tr.querySelector('td.code');
+      if (j) j.title = j.classList.contains('nochart')
+        ? '차트 없음 \\u2014 클릭하면 월별 상세가 열립니다'
+        : '클릭하면 이 종목 차트로 이동합니다';
+      if (c){ c.title = '클릭하면 월별 상세가 열립니다'; c.style.cursor = 'pointer'; }
+    });
+  });
+  var fab = document.getElementById('backTL');
+  if (fab) fab.addEventListener('click', function(){
+    if (JUMP.y != null) window.scrollTo({top:JUMP.y, behavior:'smooth'});
+    fab.hidden = true; JUMP.y = null;
+  });
+}
+function visibleCodes(tb){
+  return Array.prototype.filter.call(tb.rows, function(x){
+    return !x.classList.contains('hide') && x.dataset.code && SERIES[x.dataset.code];
+  }).map(function(x){ return x.dataset.code; });
+}
+
+/* ---- 히트맵 기간 선택 -----------------------------------------------------
+   표는 전체 개월로 한 번만 렌더하고, 앞쪽 열을 감춰서 기간을 바꾼다. 탭
+   3개가 같은 열 구조라 한 번에 걸리고, 탭을 바꿔도 기간이 유지된다. */
+var HEAT_N = 24;
+function wireHeatPeriod(nAll, def){
+  var btns = document.querySelectorAll('.pertabs .per');
+  if (!btns.length) return;
+  var tables = document.querySelectorAll('table.hm');
+  var meta = document.getElementById('hmMeta');
+  var base = meta ? (meta.dataset.base || '') : '';
+  function apply(p){
+    HEAT_N = p ? Math.min(p, nAll) : nAll;
+    var cut = nAll - HEAT_N;
+    tables.forEach(function(t){
+      Array.prototype.forEach.call(t.rows, function(r){
+        if (r.classList.contains('stg')) return;   // colspan 한 칸짜리 단계 행
+        for (var i = 1; i < r.cells.length; i++)
+          r.cells[i].classList.toggle('hide', (i - 1) < cut);
+      });
+    });
+    if (meta) meta.textContent = base + ' · ' + (p ? '최근 ' : '전체 ')
+      + HEAT_N + '개월 (' + GAXIS[cut] + ' ~ ' + GAXIS[nAll-1] + ')';
+    var gb = document.getElementById('gmBack');
+    if (gb && !gb.hidden) gmRender();            // 열린 모달도 같은 기간으로
+  }
+  btns.forEach(function(b){
+    b.addEventListener('click', function(){
+      btns.forEach(function(x){ x.classList.toggle('on', x === b); });
+      apply(parseInt(b.dataset.p, 10));
+    });
+  });
+  apply(def);
+}
+
+/* ---- 부품군 추이 모달 -----------------------------------------------------
+   값은 전부 파이썬이 group_change로 미리 계산해 GRP에 실어 놓은 것이다.
+   여기서 다시 계산하면 히트맵 칸과 그래프가 갈라진다. JS는 그리기만 한다. */
+var GM = { key:null };
+function gmRange(){                       // [start, end) index into GAXIS
+  var n = Math.min(HEAT_N || GAXIS.length, GAXIS.length);
+  return [GAXIS.length - n, GAXIS.length];
+}
+function gpc(v, d){
+  if (v == null) return '';
+  return (v > 0 ? '+' : '') + v.toFixed(d == null ? 1 : d);
+}
+function gcAxisX(s, PL, slot, y, n){
+  var step = Math.ceil(n / 16), o = [];
+  for (var i = n - 1; i >= 0; i -= step)      // 기준월부터 거꾸로 = 항상 찍힌다
+    o.push('<text class="gax" x="' + (PL + i*slot + slot/2).toFixed(1) + '" y="' + y
+         + '" text-anchor="middle">' + GAXIS[s+i].slice(2).replace('-','/') + '</text>');
+  return o.join('');
+}
+function gcBar(g){
+  var r = gmRange(), vals = g.sum.slice(r[0], r[1]);
+  var W=1400, H=250, PL=78, PR=18, PT=16, PB=34;
+  var n = vals.length, slot = (W-PL-PR)/n, ih = H-PT-PB;
+  var nz = vals.filter(function(v){ return v != null; });
+  var mx = nz.length ? Math.max.apply(null, nz) : 1;
+  var o = [];
+  for (var k = 0; k <= 4; k++){
+    var y = PT + ih*k/4;
+    o.push('<line class="ggl" x1="'+PL+'" y1="'+y.toFixed(1)+'" x2="'+(W-PR)
+         + '" y2="'+y.toFixed(1)+'"/>');
+    o.push('<text class="gax" x="'+(PL-9)+'" y="'+(y+5).toFixed(1)+'" text-anchor="end">'
+         + Math.round(mx*(1-k/4)/1000).toLocaleString() + '</text>');
+  }
+  vals.forEach(function(v, i){
+    if (v == null) return;
+    var h = ih*v/mx;
+    o.push('<rect x="'+(PL+i*slot+slot*0.16).toFixed(1)+'" y="'+(H-PB-h).toFixed(1)
+         + '" width="'+(slot*0.68).toFixed(1)+'" height="'+h.toFixed(1)
+         + '" fill="__C_BAR__" opacity="'+(i === n-1 ? 1 : 0.82)+'"><title>'
+         + GAXIS[r[0]+i] + '  ' + Math.round(v/1000).toLocaleString() + ' 백만 NTD</title></rect>');
+  });
+  o.push(gcAxisX(r[0], PL, slot, H-PB+21, n));
+  return o.join('');
+}
+function gcLine(g){
+  var r = gmRange();
+  var W=1400, H=360, PL=78, PR=18, PT=30, PB=34;
+  var defs = [['yoy','__C_YOY__'], ['mom','__C_MOM__'], ['qoq','__C_QOQ__']];
+  var use = defs.filter(function(d){
+    var cb = document.getElementById('gc' + d[0].charAt(0).toUpperCase() + d[0].slice(1));
+    return cb && cb.checked;
+  });
+  var all = [];
+  use.forEach(function(d){
+    g[d[0]].slice(r[0], r[1]).forEach(function(v){ if (v != null) all.push(v); });
+  });
+  if (!all.length)
+    return '<text class="gax" x="700" y="180" text-anchor="middle">'
+         + '표시할 선이 없습니다</text>';
+  // 클리핑 없음. 실제 최소/최대에 맞춰 늘린다.
+  var lo = Math.min(0, Math.min.apply(null, all));
+  var hi = Math.max(0, Math.max.apply(null, all));
+  var pad = (hi - lo) * 0.16 || 10;
+  lo -= pad; hi += pad;
+  var n = r[1]-r[0], slot = (W-PL-PR)/n, ih = H-PT-PB;
+  function Y(v){ return PT + (hi-v)/(hi-lo)*ih; }
+  var o = [], tight = slot < 38, fs = tight ? 13 : 15;
+  for (var k = 0; k <= 4; k++){
+    var yv = hi - (hi-lo)*k/4;
+    o.push('<line class="ggl" x1="'+PL+'" y1="'+Y(yv).toFixed(1)+'" x2="'+(W-PR)
+         + '" y2="'+Y(yv).toFixed(1)+'"/>');
+    o.push('<text class="gax" x="'+(PL-9)+'" y="'+(Y(yv)+5).toFixed(1)
+         + '" text-anchor="end">'+gpc(yv, 0)+'%</text>');
+  }
+  o.push('<line class="gzl" x1="'+PL+'" y1="'+Y(0).toFixed(1)+'" x2="'+(W-PR)
+       + '" y2="'+Y(0).toFixed(1)+'"/>');
+  o.push(gcAxisX(r[0], PL, slot, H-PB+21, n));
+  use.forEach(function(d){
+    var vals = g[d[0]].slice(r[0], r[1]), seg = [], pts = [];
+    vals.forEach(function(v, i){
+      if (v == null){
+        if (seg.length > 1) o.push(gcPoly(seg, d[1]));
+        seg = []; return;
+      }
+      var x = PL + i*slot + slot/2, y = Y(v);
+      seg.push(x.toFixed(1)+','+y.toFixed(1));
+      pts.push([x, y, v, i]);
+    });
+    if (seg.length > 1) o.push(gcPoly(seg, d[1]));
+    pts.forEach(function(p){
+      o.push('<circle cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)
+           + '" r="3.4" fill="'+d[1]+'"/>');
+    });
+    // 숫자: YoY/QoQ는 선 위, MoM은 선 아래. 겹치지 않게 층을 어긋나게 놓는다.
+    var dir = (d[0] === 'mom') ? 1 : -1;
+    var base = (d[0] === 'qoq') ? 27 : 12;
+    var lvls = tight ? 3 : 2;
+    pts.forEach(function(p){
+      var t = gpc(p[2], (tight || Math.abs(p[2]) >= 100) ? 0 : 1);
+      var w = t.length*fs*0.56 + 6;
+      var y = p[1] + dir*(base + (p[3] % lvls)*(fs + 3));
+      y = Math.max(PT+13, Math.min(H-PB-2, y));
+      o.push('<rect class="glbg" x="'+(p[0]-w/2).toFixed(1)+'" y="'+(y-fs+1).toFixed(1)
+           + '" width="'+w.toFixed(1)+'" height="'+(fs+2)+'"/>');
+      o.push('<text class="glb" x="'+p[0].toFixed(1)+'" y="'+y.toFixed(1)
+           + '" style="fill:'+d[1]+';font-size:'+fs+'px">'+t+'</text>');
+    });
+  });
+  return o.join('');
+}
+function gcPoly(seg, col){
+  return '<polyline points="'+seg.join(' ')+'" fill="none" stroke="'+col
+       + '" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>';
+}
+function gcTable(g){
+  var o = ['<table class="gmtab"><thead><tr><th class="l">코드</th>',
+           '<th class="l">한글명</th><th class="l">시가총액</th><th>당월매출</th>',
+           '<th>MoM%</th><th>YoY%</th><th>QoQ%</th></tr></thead><tbody>'];
+  g.mem.forEach(function(m){
+    o.push('<tr data-code="'+m.c+'"'+(m.x ? ' class="excl"' : '')+'>'
+      + '<td class="l code">'+m.c+'</td>'
+      + '<td class="l">'+m.k+(m.e ? ' <span class="en">'+m.e+'</span>' : '')
+      + (m.x ? '<span class="exnote">합산 제외 &mdash; '+m.x+' '+m.xk+'에 연결</span>' : '')
+      + '</td>'
+      + '<td class="l cap">'+(m.cap||'')+'</td>'
+      + '<td class="rev">'+_mn(m.r)+'</td>'
+      + '<td class="'+_cls(m.m)+'">'+gpc(m.m)+'</td>'
+      + '<td class="'+_cls(m.y)+'">'+gpc(m.y)+'</td>'
+      + '<td class="'+_cls(m.q)+'">'+gpc(m.q)+'</td></tr>');
+  });
+  o.push('</tbody></table>');
+  return o.join('');
+}
+function gmRender(){
+  var g = GRP[GM.key];
+  if (!g) return;
+  var b = document.getElementById('gmBack'), r = gmRange();
+  b.querySelector('.gmname').textContent = g.nm;
+  b.querySelector('.gmstage').textContent = g.st;
+  var last = g.sum[GAXIS.length-1];
+  b.querySelector('.gmfacts').innerHTML =
+      '<b>' + g.n + '</b>종목' + (g.nh !== g.n ? ' (합산 ' + g.nh + ')' : '')
+    + ' &nbsp;·&nbsp; 시총 <b>' + (g.cap || '&mdash;') + '</b>'
+    + ' &nbsp;·&nbsp; ' + GAXIS[GAXIS.length-1] + ' 매출 <b>' + _mn(last) + '</b> 백만 NTD';
+  document.getElementById('gmPos').textContent =
+      (GORDER.indexOf(GM.key)+1) + ' / ' + GORDER.length;
+  document.getElementById('gmBarSub').textContent =
+      '백만 NTD · ' + GAXIS[r[0]] + ' ~ ' + GAXIS[GAXIS.length-1]
+    + ' (' + (r[1]-r[0]) + '개월) · 모자 이중계상 제거';
+  document.getElementById('gmLineSub').textContent =
+      'YoY 12개월 전 대비 / MoM 전월 대비 / QoQ 3개월 합 대비 · '
+    + '클리핑 없는 실제값 · 점선이 0%';
+  document.getElementById('gmMemSub').textContent =
+      GAXIS[GAXIS.length-1] + ' 기준 · 행을 누르면 그 종목 월별 상세';
+  document.getElementById('gcBar').innerHTML = gcBar(g);
+  document.getElementById('gcLine').innerHTML = gcLine(g);
+  document.getElementById('gmTab').innerHTML = gcTable(g);
+}
+function openGroup(key){
+  if (!GRP[key]) return;
+  GM.key = key;
+  document.getElementById('gmBack').hidden = false;
+  document.body.style.overflow = 'hidden';
+  gmRender();
+  document.querySelector('#gmBack .gmbody').scrollTop = 0;
+}
+function closeGroup(){
+  document.getElementById('gmBack').hidden = true;
+  if (document.getElementById('mdBack').hidden) document.body.style.overflow = '';
+}
+function gmStep(d){
+  var i = GORDER.indexOf(GM.key);
+  if (i < 0) return;
+  GM.key = GORDER[(i + d + GORDER.length) % GORDER.length];
+  gmRender();
+  document.querySelector('#gmBack .gmbody').scrollTop = 0;
+}
+function wireGroupModal(){
+  var b = document.getElementById('gmBack');
+  if (!b || typeof GRP === 'undefined') return;
+  document.querySelectorAll('table.hm th.hl[data-g]').forEach(function(th){
+    if (th.closest('thead')) return;
+    th.addEventListener('click', function(){ openGroup(th.dataset.g); });
+  });
+  b.addEventListener('click', function(e){ if (e.target === b) closeGroup(); });
+  document.getElementById('gmClose').addEventListener('click', closeGroup);
+  document.getElementById('gmPrev').addEventListener('click', function(){ gmStep(-1); });
+  document.getElementById('gmNext').addEventListener('click', function(){ gmStep(1); });
+  ['gcYoy','gcMom','gcQoq'].forEach(function(id){
+    var cb = document.getElementById(id);
+    if (cb) cb.addEventListener('change', function(){
+      document.getElementById('gcLine').innerHTML = gcLine(GRP[GM.key]);
+    });
+  });
+  // 종목 모달이 이 위에 열려 있으면 키는 그쪽 것이다
+  document.addEventListener('keydown', function(e){
+    if (b.hidden || !document.getElementById('mdBack').hidden) return;
+    if (e.key === 'Escape') closeGroup();
+    else if (e.key === 'ArrowLeft') gmStep(-1);
+    else if (e.key === 'ArrowRight') gmStep(1);
+  });
+  document.getElementById('gmTab').addEventListener('click', function(e){
+    var tr = e.target.closest('tr');
+    if (!tr || !tr.dataset.code) return;
+    var list = GRP[GM.key].mem.map(function(m){ return m.c; })
+                 .filter(function(c){ return !!SERIES[c]; });
+    openModal(tr.dataset.code, list);
   });
 }
 """
@@ -2509,12 +3076,14 @@ def render(rows, prows, ref_ym, pending, stats, meta) -> str:
 {head}
 {render_timeline(rows, meta["pend"], ref_ym, meta["mc"], sec=1)}
 {render_charts(rows, ref_ym, meta["n_months"], stats, sec=2)}
-{render_heatmap(rows, ref_ym, meta["heat_months"], sec=3)}
+{render_heatmap(rows, ref_ym, meta["heat_months"], sec=3,
+                default_n=meta["heat_default"])}
 {render_inflection(rows, ref_ym, sec=4)}
 {render_pending(pending, prows, ref_ym, it_total, n=5, rows=rows)}
 {render_table(rows, ref_ym, n=6, clickable=meta["table_clickable"], pend=meta["pend"], mc=meta["mc"])}
 {render_movers(rows, ref_ym, sec=7)}
 {MODAL_HTML}
+{GROUP_HTML.replace("__C_YOY__", LINE_COL).replace("__C_MOM__", MOM_COL).replace("__C_QOQ__", QOQ_COL)}
 <footer>
 출처: TWSE t187ap05_L / TPEx mopsfin_t187ap05_O / MOPS t21sc03
 (원본 단위: 천 NTD &rarr; 화면 표시 백만 NTD)<br>
@@ -2530,11 +3099,14 @@ YoY·MoM·누계YoY는 build 시점에 원본 절대금액에서 매번 재계�
 {meta["payload"]}
 {JS}
 {MODAL_JS.replace("__LBL_H__", str(LBL_H)).replace("__LBL_FS__", str(LBL_FS)).replace("__LBL_ZIG__", str(LBL_ZIG))}
+{GROUP_JS.replace("__C_YOY__", LINE_COL).replace("__C_MOM__", MOM_COL).replace("__C_QOQ__", QOQ_COL).replace("__C_BAR__", BAR_FILL)}
 wire('tAll'); wire('tPend');
 wire('tTL');
 wire('tTLU');
 wireModal(); wireLineToggles(); wireHeatTabs(); wireTimeline(1.0);
 wireNumToggle({meta["n_months"]});
+wireJumps(); wireGroupModal();
+wireHeatPeriod({meta["heat_months"]}, {meta["heat_default"]});
 wireFilters({{table:'tAll', q:'q', ind:'fInd', mkt:'fMkt', bom:'fBom',
              small:'fSmall', bomOnly:'fBomOnly', unfiled:'fUnfiled',
              cap:'fCap', capFloorJo:1.0, count:'cnt',
@@ -2572,7 +3144,10 @@ def main(argv=None) -> int:
     # charts show a fixed window; the extra history behind it exists so the
     # window's first month has its own prior year for YoY
     n_months = min(groups.CHART_MONTHS, have_months)
-    heat_months = min(groups.HEATMAP_MONTHS, have_months)
+    # 히트맵은 가진 개월을 전부 렌더하고 기본은 24개월만 보여준다. 기간 버튼이
+    # 표를 다시 만들지 않고 열만 감추기 때문에 탭을 바꿔도 기간이 유지된다.
+    heat_months = have_months
+    heat_default = min(groups.HEATMAP_MONTHS, have_months)
 
     print(f"build.py  db={args.db}")
     print(f"  reference (complete) month : {ref_ym}")
@@ -2672,9 +3247,15 @@ def main(argv=None) -> int:
           f"{len(payload.encode('utf-8')):,} bytes of JSON, "
           f"발표일 {sum(len(v) for v in disc_all.values())}건")
 
+    gpay, n_grp = group_payload(rows, months_axis(ref_ym, heat_months), ref_ym)
+    print(f"  group payload              : {n_grp} rows x {heat_months} months, "
+          f"{len(gpay.encode('utf-8')):,} bytes of JSON")
+    payload = payload + gpay
+
     html_out = render(rows, prows, ref_ym, pending, stats,
                       {"lo": lo, "pub": pub, "n_months": n_months,
-                       "heat_months": heat_months, "payload": payload,
+                       "heat_months": heat_months,
+                       "heat_default": heat_default, "payload": payload,
                        "table_clickable": args.modal_all, "pend": pend,
                        "mc": mc})
     print(f"  charts                     : {stats.get('chart_stocks', 0)} stocks "
