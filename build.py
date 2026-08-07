@@ -313,13 +313,27 @@ def load_mktcap(conn) -> dict:
 
 
 def fmt_cap(v) -> str:
-    """(usd_b, krw_jo) -> '$14.2B · 19.8조'. 없으면 빈칸."""
+    """(usd_b, krw_jo) -> '$1.90T · 2,710조 원'. 없으면 빈칸.
+
+    단위를 값 크기에 맞춰 바꾼다. 고정 단위를 쓰면 TSMC가 $1904.0B로,
+    소형주가 0.5조로 찍혀 둘 다 읽기 어렵다.
+    """
     if not v:
         return ""
     usd_b, krw_jo = v
-    u = f"${usd_b / 1000:.2f}T" if usd_b >= 1000 else f"${usd_b:.1f}B"
-    k = f"{krw_jo:,.0f}조" if krw_jo >= 1000 else f"{krw_jo:.1f}조"
-    return f'{u} <span class="capk">{k}</span>'
+    if usd_b >= 1000:
+        u = f"${usd_b / 1000:,.2f}T"
+    elif usd_b >= 1:
+        u = f"${usd_b:,.1f}B"
+    else:
+        u = f"${usd_b * 1000:,.0f}M"
+    if krw_jo >= 1000:
+        k = f"{krw_jo:,.0f}조 원"
+    elif krw_jo >= 1:
+        k = f"{krw_jo:,.1f}조 원"
+    else:
+        k = f"{krw_jo * 10000:,.0f}억 원"
+    return f'{u}<span class="capsep"> · </span><span class="capk">{k}</span>'
 
 
 def load_master(conn) -> dict:
@@ -776,9 +790,10 @@ svg.ch rect[fill="{ACCENT2}"] {{ cursor:crosshair; }}
 .tlbig.warn b {{ font-size:26px; color:var(--a3); }}
 .tlmeta {{ font-size:17px; color:var(--mute); line-height:1.5; }}
 .tlmeta b {{ color:var(--fg); }}
-.tlchk {{ margin-left:auto; }}
+.tlchk {{ margin-left:auto; display:flex; flex-wrap:wrap; gap:14px; }}
 td.cap {{ color:#cfe0ec; font-size:18px; white-space:nowrap; }}
-td.cap .capk {{ color:var(--mute); font-size:16px; margin-left:6px; }}
+td.cap .capk {{ color:var(--mute); font-size:16px; }}
+.capsep {{ color:#4d5b67; }}
 .ccap {{ margin-left:10px; color:#a9bccb; }}
 .ccap .capk {{ color:var(--mute); }}
 td.tlts {{ color:var(--a1); font-weight:700; font-variant-numeric:tabular-nums; }}
@@ -863,7 +878,8 @@ table.hm tr.tiny th.hl {{ background:#151b21; color:#8b9aa6; }}
   cursor:pointer; letter-spacing:0;
 }}
 .tab:first-child {{ border-radius:8px 0 0 8px; }}
-.tab:last-child {{ border-radius:0 8px 8px 0; border-left:0; }}
+.tab:not(:first-child) {{ border-left:0; }}
+.tab:last-child {{ border-radius:0 8px 8px 0; }}
 .tab:hover {{ color:var(--fg); }}
 .tab.on {{ background:var(--a3); color:#10161c; border-color:var(--a3); }}
 
@@ -1074,15 +1090,19 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
     parts = [
         f'<h2><span class="n">{sec}</span>발표 타임라인 &mdash; {esc(ym)}</h2>',
         '<div class="tlhead">'
-        f'<div class="tlbig"><b>{len(filed)}</b><span>발표</span></div>'
-        f'<div class="tlbig dim"><b>{len(unfiled)}</b><span>미발표</span></div>'
+        f'<div class="tlbig"><b id="tlNFiled">{len(filed)}</b><span>발표</span></div>'
+        f'<div class="tlbig dim"><b id="tlNUnfiled">{len(unfiled)}</b>'
+        '<span>미발표</span></div>'
         f'<div class="tlbig {dcls}"><b>{esc(dtxt)}</b>'
         f'<span>{esc(dl)}</span></div>'
-        f'<div class="tlmeta">부품군 <b>{n_bom_filed}</b> / '
+        f'<div class="tlmeta">부품군 <b id="tlNBom">{n_bom_filed}</b> / '
         f'{sum(1 for r in rows if r["bom_group"])} 발표'
         f'<br>마지막 감지 <b>{esc(newest_txt)}</b></div>'
-        '<label class="chk tlchk"><input type="checkbox" id="tlBom">부품군만</label>'
-        '</div>',
+        '<div class="tlchk">'
+        '<label class="chk"><input type="checkbox" id="tlBom">부품군만</label>'
+        + ('<label class="chk"><input type="checkbox" id="tlCap">'
+           '시총 1조원 이상만</label>' if mc.get("cap") else "")
+        + '</div></div>',
         '<div class="scroll"><table id="tTL"><thead><tr>'
         + th("발표시각(KST)", "l") + th("코드", "l pin") + th("한글명", "l")
         + th("부품군", "l") + th("시가총액", "l", "종가 x 보통주 발행주식수")
@@ -1097,7 +1117,9 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
         mom = pct(vals[r["code"]], r["rev"].get(shift_ym(ym, -1)))
         yoy = pct(vals[r["code"]], r["rev"].get(shift_ym(ym, -12)))
         parts.append(
-            f'<tr data-bom="{esc(g)}"{" class=isbom" if g else ""}>'
+            f'<tr data-bom="{esc(g)}" '
+            f'data-cap="{(r["cap"] or [0, 0])[1]:.4f}"'
+            f'{" class=isbom" if g else ""}>'
             f'<td class="l tlts" data-v="{esc(ts or "")}">{shown}</td>'
             f'<td class="l pin code" data-v="{esc(r["code"])}">{esc(r["code"])}</td>'
             f'<td class="l" data-v="{esc(r["name_kr"])}">{name_cell(r)}</td>'
@@ -1112,20 +1134,26 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
 
     # 아직 안 낸 곳은 접어둔다. 마감이 다가올수록 이 목록이 본론이 된다.
     parts.append(
-        f'<details class="unf"><summary>아직 발표하지 않은 <b>{len(unfiled)}</b>종목 '
+        '<details class="unf"><summary>아직 발표하지 않은 '
+        f'<b id="tlUnfShown">{len(unfiled)}</b>종목 '
         f'(부품군 {sum(1 for r in unfiled if r["bom_group"])}종목 포함)</summary>'
-        '<div class="scroll"><table><thead><tr>'
+        '<div class="scroll"><table id="tTLU"><thead><tr>'
         + th("코드", "l") + th("한글명", "l") + th("부품군", "l")
+        + (th("시가총액", "l") if mc.get("cap") else "")
         + th(f"{esc(ref_ym)} 매출", "", "완결월 기준 규모")
         + '</tr></thead><tbody>')
     for r in unfiled:
         g = r["bom_group"] or ""
         parts.append(
-            f'<tr{" class=isbom" if g else ""}>'
-            f'<td class="l code">{esc(r["code"])}</td>'
-            f'<td class="l">{name_cell(r)}</td>'
-            f'<td class="l bom">{esc(g)}</td>'
-            f'<td class="rev">{mn(r["rev_now"])}</td></tr>')
+            f'<tr data-bom="{esc(g)}" '
+            f'data-cap="{(r["cap"] or [0, 0])[1]:.4f}"'
+            f'{" class=isbom" if g else ""}>'
+            f'<td class="l code" data-v="{esc(r["code"])}">{esc(r["code"])}</td>'
+            f'<td class="l" data-v="{esc(r["name_kr"])}">{name_cell(r)}</td>'
+            f'<td class="l bom" data-v="{esc(g)}">{esc(g)}</td>'
+            + (f'<td class="l cap" data-v="{(r["cap"] or [0])[0]:.4f}">'
+               f'{fmt_cap(r["cap"])}</td>' if mc.get("cap") else "")
+            + f'<td class="rev" data-v="{r["rev_now"]}">{mn(r["rev_now"])}</td></tr>')
     parts.append("</tbody></table></div></details>")
 
     parts.append(
@@ -1617,6 +1645,7 @@ HEAT_BASE = (20, 27, 34)
 HEAT_POS = (237, 125, 49)   # #ED7D31
 HEAT_NEG = (91, 155, 213)   # #5B9BD5
 HEAT_CLIP_MOM = 25.0        # MoM 탭. YoY의 ±40을 그대로 쓰면 전부 회색이 된다.
+HEAT_CLIP_QOQ = 30.0        # 3개월 합 QoQ. MoM보다 진폭이 크고 YoY보다 작다.
 HEAT_ZERO_EPS = 0.5         # 정수 표기라 이 아래는 '0'으로 보고 회색
 SMALL_GROUP_K = 3_000_000   # 합계 3,000 백만 NTD 미만이면 노이즈 경고
 
@@ -1647,17 +1676,28 @@ def heat_style(v, clip: float = HEAT_CLIP) -> tuple[str, str, str]:
     return f"rgb({rgb[0]},{rgb[1]},{rgb[2]})", fg, "sat" if over else ""
 
 
-def group_change(by_code: dict, members: list[str], ym: str, lag: int) -> dict:
+def _window_sum(rec: dict, ym: str, window: int):
+    """ym에서 끝나는 window개월 합. 한 달이라도 비면 None."""
+    if window == 1:
+        return rec["rev"].get(ym)
+    vals = [rec["rev"].get(shift_ym(ym, -i)) for i in range(window)]
+    return None if any(v is None for v in vals) else sum(vals)
+
+
+def group_change(by_code: dict, members: list[str], ym: str, lag: int,
+                 window: int = 1) -> dict:
     """like-for-like change for a set of codes at one month.
 
-    lag=12 gives YoY, lag=1 gives MoM. Only codes with revenue in BOTH ym and
-    ym-lag enter the sum. Without that, a member that listed mid-window
-    (7769 starts 2024-07 and is ~31% of its group) makes the aggregate jump for
-    twelve months and the cell lights up on nothing but a new arrival.
+    (window, lag) = (1, 12) YoY / (1, 1) MoM / (3, 3) 3개월합 QoQ.
+    QoQ는 변곡 점검의 qoq_3m과 같은 공식이다: 해당 월 포함 직전 3개월 합을
+    그 이전 3개월 합과 비교한다.
 
-    lfl_sum_* drives the percentage. total_sum is the plain all-members figure
-    and is what any 'group revenue' label should show -- the two differ, so they
-    are named apart on purpose.
+    비교 구간 양쪽에 자료가 다 있는 종목만 합산한다(like-for-like). 그러지
+    않으면 중간에 상장한 종목(7769는 2024-07 시작이고 소속 부품군의 약 31%)
+    때문에 12개월 내내 합계가 뛰어, 실제 성장이 없는데도 칸에 불이 들어온다.
+
+    lfl_sum_* 가 퍼센트를 만들고, total_sum은 전 종목 단순합이라 '부품군 매출'
+    라벨에 쓰는 값이다. 둘은 다르므로 이름을 갈라 놓았다.
     """
     prev = shift_ym(ym, -lag)
     lfl_now = lfl_prev = 0
@@ -1667,9 +1707,11 @@ def group_change(by_code: dict, members: list[str], ym: str, lag: int) -> dict:
         rec = by_code.get(c)
         if rec is None:
             continue
-        a, b = rec["rev"].get(ym), rec["rev"].get(prev)
-        if a is not None:
-            total_sum += a
+        a = _window_sum(rec, ym, window)
+        b = _window_sum(rec, prev, window)
+        cur = rec["rev"].get(ym)
+        if cur is not None:
+            total_sum += cur
         if a is not None and b is not None:
             lfl_now += a
             lfl_prev += b
@@ -1681,14 +1723,17 @@ def group_change(by_code: dict, members: list[str], ym: str, lag: int) -> dict:
 
 
 def heat_table(by_code: dict, axis: list[str], ref_ym: str,
-               lag: int, clip: float) -> str:
-    """One heatmap grid. lag=12 -> YoY, lag=1 -> MoM.
+               lag: int, clip: float, window: int = 1) -> str:
+    """One heatmap grid. (window, lag): (1,12) YoY / (1,1) MoM / (3,3) QoQ.
 
-    Both tabs share rows, row order, row labels and columns so that switching
+    All tabs share rows, row order, row labels and columns so that switching
     between them changes only the colour field -- that is the whole point of
     putting them in the same place.
     """
-    base = "전년" if lag == 12 else "전월"
+    if window > 1:
+        cur_lbl, base_lbl = f"최근{window}개월", f"직전{window}개월"
+    else:
+        cur_lbl, base_lbl = "당월", ("전년" if lag == 12 else "전월")
 
     def cell(d):
         v = d["chg"]
@@ -1701,8 +1746,8 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
             txt = f"{v:+.0f}"
         klass = "hc" + (" part" if d["n_lfl"] < d["n_pool"] else "") \
                      + (" " + sat if sat else "")
-        tip = (f"그룹 {d['n_pool']}종목 중 {d['n_lfl']}종목 합산 · "
-               f"당월 {mn(d['lfl_sum'])} → {base} {mn(d['lfl_sum_prev'])}"
+        tip = (f"부품군 {d['n_pool']}종목 중 {d['n_lfl']}종목 · "
+               f"{cur_lbl} {mn(d['lfl_sum'])} → {base_lbl} {mn(d['lfl_sum_prev'])}"
                if d["n_lfl"] else "합산 가능한 종목 없음")
         if sat:
             tip += f"  (색 포화: 실제 {v:+,.1f}%)"
@@ -1710,7 +1755,8 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
                 f'title="{esc(tip)}">{txt}</td>')
 
     def row(label, sub, members, extra=""):
-        cells = [cell(group_change(by_code, members, ym, lag)) for ym in axis]
+        cells = [cell(group_change(by_code, members, ym, lag, window))
+                 for ym in axis]
         return (f'<tr class="{extra}"><th class="hl">{esc(label)}'
                 f'<span class="hsub">{esc(sub)}</span></th>{"".join(cells)}</tr>')
 
@@ -1727,7 +1773,7 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
     # benchmark first: without it there is no way to tell whether a group is
     # simply riding the cycle or actually outrunning it
     bench = bom_groups.benchmark_members()
-    b_now = group_change(by_code, bench, ref_ym, lag)
+    b_now = group_change(by_code, bench, ref_ym, lag, window)
     out.append(row(f"부품군 {len(bom_groups.all_codes())} 합계",
                    f"모자 제외 {len(bench)} · {mn(b_now['total_sum'])}",
                    bench, extra="bench"))
@@ -1739,7 +1785,7 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
             if g not in bom_groups.GROUPS:
                 continue
             members = bom_groups.heatmap_members(g)
-            now = group_change(by_code, members, ref_ym, lag)
+            now = group_change(by_code, members, ref_ym, lag, window)
             small = now["total_sum"] < SMALL_GROUP_K
             sub = f"{len(bom_groups.GROUPS[g])}종목 · {mn(now['total_sum'])}"
             out.append(row(g, sub, members, extra="tiny" if small else ""))
@@ -1781,6 +1827,19 @@ def render_heatmap(rows, ref_ym: str, n_months: int, sec=2):
         '고정되지 않습니다. <b>계절 패턴을 깨는 달이 실제 신호입니다.</b>'
         '</div>')
 
+    fn_qoq = (
+        '<div class="note fn hmfn" data-pane="qoq" hidden>'
+        + common
+        + '<br>· 3개월 합계 롤링 QoQ입니다. 해당 월 포함 직전 3개월 합을 그 이전 '
+        '3개월 합과 비교하며, 6개월 전부 자료가 있는 종목만 합산합니다'
+        f'<br>· 색 농도는 ±{HEAT_CLIP_QOQ:.0f}%에서 포화합니다'
+        f'(YoY ±{HEAT_CLIP:.0f}%, MoM ±{HEAT_CLIP_MOM:.0f}%). '
+        '<b class="satlegend">흰 굵은 글씨</b> = 초과'
+        '<br>· <b>3개월 합계를 굴려서 비교하므로 MoM보다 계절성이 크게 줄지만 '
+        '완전히 사라지지는 않습니다.</b> 춘절이 낀 1~3월이 분모가 되는 4~6월 열은 '
+        '구조적으로 높게 나옵니다. <b>계절 패턴을 거스르는 칸이 실제 신호입니다.</b>'
+        '</div>')
+
     return "\n".join([
         f'<h2><span class="n">{sec}</span>부품군 히트맵 '
         f'<span class="meta">{len(bom_groups.GROUPS)}개 부품군 · 최근 {n_months}개월 '
@@ -1788,12 +1847,15 @@ def render_heatmap(rows, ref_ym: str, n_months: int, sec=2):
         '<span class="tabs">'
         '<button class="tab on" data-pane="yoy">YoY</button>'
         '<button class="tab" data-pane="mom">MoM</button>'
+        '<button class="tab" data-pane="qoq">QoQ</button>'
         '</span></h2>',
         f'<div class="hmpane" data-pane="yoy">'
         f'{heat_table(by_code, axis, ref_ym, 12, HEAT_CLIP)}</div>',
         f'<div class="hmpane" data-pane="mom" hidden>'
         f'{heat_table(by_code, axis, ref_ym, 1, HEAT_CLIP_MOM)}</div>',
-        fn_yoy, fn_mom,
+        f'<div class="hmpane" data-pane="qoq" hidden>'
+        f'{heat_table(by_code, axis, ref_ym, 3, HEAT_CLIP_QOQ, window=3)}</div>',
+        fn_yoy, fn_mom, fn_qoq,
     ])
 
 
@@ -1801,11 +1863,13 @@ def render_heatmap(rows, ref_ym: str, n_months: int, sec=2):
 # section 5: inflection check
 # --------------------------------------------------------------------------- #
 def qoq_3m(rec: dict, ref_ym: str):
-    """최근 3개월 합 ÷ 직전 3개월 합 - 1. 한 달이라도 비면 None."""
-    def s(offset):
-        vals = [rec["rev"].get(shift_ym(ref_ym, -(offset + i))) for i in range(3)]
-        return None if any(v is None for v in vals) else sum(vals)
-    return pct(s(0), s(3))
+    """최근 3개월 합 ÷ 직전 3개월 합 - 1. 한 달이라도 비면 None.
+
+    히트맵 QoQ 탭과 같은 공식이라 _window_sum을 함께 쓴다. 두 곳에 따로
+    적으면 한쪽만 고쳐져 값이 갈린다.
+    """
+    return pct(_window_sum(rec, ref_ym, 3),
+               _window_sum(rec, shift_ym(ref_ym, -3), 3))
 
 
 def abs_trend(rec: dict, ref_ym: str) -> tuple[str, float | None]:
@@ -2211,18 +2275,43 @@ function wireNumToggle(nMonths){
   }
   cb.addEventListener('change', run); run();
 }
-// 타임라인의 [부품군만] 토글
-function wireTimeline(){
-  var cb = document.getElementById('tlBom'), t = document.getElementById('tTL');
-  if (!cb || !t) return;
-  var rows = Array.prototype.slice.call(t.tBodies[0].rows);
+// 타임라인 필터. 발표 목록과 미발표 접기 목록에 같이 걸고, 위의 큰 숫자도 갱신한다.
+function wireTimeline(capFloorJo){
+  var bom = document.getElementById('tlBom');
+  var cap = document.getElementById('tlCap');
+  var t = document.getElementById('tTL'), u = document.getElementById('tTLU');
+  if (!bom || !t) return;
+  var rowsF = Array.prototype.slice.call(t.tBodies[0].rows);
+  var rowsU = u ? Array.prototype.slice.call(u.tBodies[0].rows) : [];
   function run(){
-    var only = cb.checked;
-    rows.forEach(function(r){
-      r.classList.toggle('hide', only && !r.dataset.bom);
-    });
+    var onlyBom = bom.checked;
+    // 부품군 113종목은 직접 고른 것이라 시총으로 거르지 않는다 -- 종목 표와 같은 규칙
+    var capMin = (cap && cap.checked && !onlyBom) ? capFloorJo : 0;
+    if (cap){
+      cap.disabled = onlyBom;
+      var lab = cap.closest('.chk');
+      if (lab) lab.classList.toggle('off', onlyBom);
+    }
+    function apply(rows){
+      var n = 0, nb = 0;
+      rows.forEach(function(r){
+        var d = r.dataset;
+        var ok = (!onlyBom || d.bom) && (!capMin || parseFloat(d.cap || 0) >= capMin);
+        r.classList.toggle('hide', !ok);
+        if (ok){ n++; if (d.bom) nb++; }
+      });
+      return [n, nb];
+    }
+    var f = apply(rowsF), uu = apply(rowsU);
+    var e;
+    if ((e = document.getElementById('tlNFiled'))) e.textContent = f[0];
+    if ((e = document.getElementById('tlNBom'))) e.textContent = f[1];
+    if ((e = document.getElementById('tlNUnfiled'))) e.textContent = uu[0];
+    if ((e = document.getElementById('tlUnfShown'))) e.textContent = uu[0];
   }
-  cb.addEventListener('change', run); run();
+  bom.addEventListener('change', run);
+  if (cap) cap.addEventListener('change', run);
+  run();
 }
 // heatmap tabs: swap the grid in place, and swap the footnotes with it
 function wireHeatTabs(){
@@ -2318,7 +2407,8 @@ YoY·MoM·누계YoY는 build 시점에 원본 절대금액에서 매번 재계�
 {MODAL_JS.replace("__LBL_H__", str(LBL_H)).replace("__LBL_FS__", str(LBL_FS)).replace("__LBL_ZIG__", str(LBL_ZIG))}
 wire('tAll'); wire('tPend');
 wire('tTL');
-wireModal(); wireMomToggle(); wireHeatTabs(); wireTimeline();
+wire('tTLU');
+wireModal(); wireMomToggle(); wireHeatTabs(); wireTimeline(1.0);
 wireNumToggle({meta["n_months"]});
 wireFilters({{table:'tAll', q:'q', ind:'fInd', mkt:'fMkt', bom:'fBom',
              small:'fSmall', bomOnly:'fBomOnly', unfiled:'fUnfiled',
