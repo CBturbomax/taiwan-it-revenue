@@ -525,6 +525,24 @@ def name_cell(rec, with_biz: bool = False) -> str:
     return f'<span class="nm"{tip_attr}>{kr}</span>{en_html}'
 
 
+def with_pending(rows, pend):
+    """진행 중인 달을 이미 낸 종목만 그 달 값을 얹은 행 사본.
+
+    rec["rev"]는 완결월까지만 담기 때문에, 최신월을 쓰는 화면(차트·히트맵·
+    부품군 모달)은 전부 이걸 통과시킨 rows를 쓴다. 각자 따로 끼워 넣으면
+    한 곳만 고쳐져 같은 달의 값이 화면마다 달라진다.
+    """
+    ym = (pend or {}).get("ym")
+    if not ym:
+        return rows
+    vals = pend.get("vals") or {}
+    out = []
+    for r in rows:
+        v = vals.get(r["code"])
+        out.append({**r, "rev": {**r["rev"], ym: v}} if v is not None else r)
+    return out
+
+
 def charted_codes(rows) -> set[str]:
     """차트 카드가 실제로 그려지는 코드.
 
@@ -1029,6 +1047,16 @@ table.gmtab tbody td {{ font-size:19px; padding:9px 14px; }}
 table.gmtab tbody tr {{ cursor:pointer; }}
 table.gmtab tr.excl {{ opacity:.62; }}
 table.gmtab tr.excl td {{ font-style:italic; }}
+td.mym {{ color:var(--mute); font-size:17px; }}
+td.mym.pendym {{ color:var(--a1); font-weight:700; }}
+/* 진행 중인 달의 열: 완결월(refm)과 헷갈리지 않게 다른 색으로 표시한다 */
+table.hm th.hmth.pendm {{
+  background:#252c22; color:#cfe0a8; font-weight:800;
+  border-left:2px dashed #8fae5a;
+}}
+table.hm th.hmth.pendm .rtag {{
+  display:block; font-size:12px; font-weight:600; color:#a8c76e; letter-spacing:0;
+}}
 .exnote {{ color:var(--a2); font-size:16px; font-style:normal; margin-left:8px; }}
 
 /* --- section 5 inflection --- */
@@ -1537,7 +1565,7 @@ def months_axis(ref_ym: str, n: int) -> list[str]:
     return [shift_ym(ref_ym, -(n - 1 - i)) for i in range(n)]
 
 
-def chart_svg(rec: dict, axis: list[str], hdr_i: int | None = None,
+def chart_svg(rec: dict, axis: list[str], skip: int = 0,
               pend_ym: str = "") -> str:
     """Bar (revenue, 백만 NTD) + line (YoY%) over `axis`, drawn by hand.
 
@@ -1670,11 +1698,11 @@ def chart_svg(rec: dict, axis: list[str], hdr_i: int | None = None,
     sub_line(moms, "mom", MOM_COL, 1.4, 0.75, "MoM")
     sub_line(qoqs, "qoq", QOQ_COL, 1.8, 0.9, "QoQ")
 
-    # label row: max revenue on the left, one month's MoM / YoY / QoQ on the right.
-    # hdr_i는 그 '한 달'이 어느 달인지다. 7월을 이미 낸 회사는 7월, 아직인
-    # 회사는 완결월 6월. 세 값을 모두 축 배열에서 같은 인덱스로 뽑아야
-    # 헤더 숫자와 선의 마지막 점이 갈리지 않는다.
-    h = len(axis) - 1 if hdr_i is None else hdr_i
+    # label row: max revenue on the left, the last drawn month's MoM/YoY/QoQ on
+    # the right. 축이 카드마다 끝나는 달이 달라서(7월을 낸 회사는 7월, 아직인
+    # 회사는 6월) 세 값을 모두 축 배열의 마지막 인덱스에서 뽑는다. 그래야
+    # 헤더 숫자와 선의 마지막 점이 같은 달을 가리킨다.
+    h = len(axis) - 1
     mom, yoy, qoq = moms[h], yoys[h], qoqs[h]
     out.append(f'<text x="{PL}" y="30" class="cl cmax">{mn(rev_max)}</text>')
     out.append(f'<text x="{PL}" y="50" class="cs">최대 · 백만 NTD</text>')
@@ -1684,14 +1712,18 @@ def chart_svg(rec: dict, axis: list[str], hdr_i: int | None = None,
     out.append(f'<text x="{PR}" y="30" class="cl chdr" text-anchor="end"></text>')
     out.append(f'<text x="{PR}" y="50" class="cs chlbl" text-anchor="end"></text>')
 
-    # sparse month ticks
+    # sparse month ticks -- 오른쪽 끝에서 거꾸로 6개월씩. 앞에서부터 찍고
+    # 마지막 칸에 라벨을 하나 더 얹으면, 축 길이가 6의 배수일 때 그 둘이
+    # 같은 자리에 겹쳐 글자가 뭉개진다(37칸에서 26/07이 두 번 찍혔다).
     step = 6
-    for i in range(0, n, step):
+    for i in range(n - 1, -1, -step):
         ym = axis[i]
-        out.append(f'<text x="{PL + i * slot + slot / 2:.1f}" y="{PB + 24}" '
-                   f'class="ct" text-anchor="middle">{ym[2:4]}/{ym[5:7]}</text>')
-    out.append(f'<text x="{PR}" y="{PB + 24}" class="ct" text-anchor="end">'
-               f'{axis[-1][2:4]}/{axis[-1][5:7]}</text>')
+        if i == n - 1:
+            out.append(f'<text x="{PR}" y="{PB + 24}" class="ct" '
+                       f'text-anchor="end">{ym[2:4]}/{ym[5:7]}</text>')
+        else:
+            out.append(f'<text x="{PL + i * slot + slot / 2:.1f}" y="{PB + 24}" '
+                       f'class="ct" text-anchor="middle">{ym[2:4]}/{ym[5:7]}</text>')
     # --- 월별 숫자 라벨 -----------------------------------------------------
     # viewBox는 540 고정이고 1열 전체폭에서 약 3배로 확대되므로, CSS 11px로
     # 보이려면 user unit 기준 3.7이어야 한다. 3열일 때는 읽을 수 없는 크기지만
@@ -1713,7 +1745,11 @@ def chart_svg(rec: dict, axis: list[str], hdr_i: int | None = None,
     if LABEL_MODE == "js":
         # JS가 파이썬과 똑같은 축을 재현하도록 스케일 파라미터를 실어 보낸다.
         # 축 계산을 JS에 복제하면 선과 라벨이 어긋나기 시작한다.
-        sc = f"{PL:.1f},{slot:.4f},{rev_max},{lo:.4f},{hi:.4f},{zy:.2f},{half:.2f}"
+        # n = 이 카드의 축 길이, skip = SERIES 끝에서 몇 칸을 안 쓰는지.
+        # 카드마다 축이 달라진 뒤로는 둘 다 카드에 실어야 JS가 같은 창을
+        # 재현한다(공통 nMonths 하나로는 못 맞춘다).
+        sc = (f"{PL:.1f},{slot:.4f},{rev_max},{lo:.4f},{hi:.4f},{zy:.2f},"
+              f"{half:.2f},{n},{skip}")
         extra += f' data-sc="{sc}"'
     return svg.replace("<svg viewBox", f"<svg{extra} viewBox", 1)
 
@@ -1746,15 +1782,14 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None,
                   sec=6, pend=None):
     """Section 4: every bom_groups stock, one mini chart each, grouped by BoM layer.
 
-    진행 중인 달을 이미 낸 회사는 그 달까지 그린다. 축은 카드마다 다르게 두지
-    않고 전 카드가 같은 (완결월 + 진행월) 축을 쓴다. 카드마다 축이 다르면
-    113개를 나란히 훑을 때 같은 x좌표가 다른 달이 되어 비교가 깨진다. 아직
-    안 낸 회사는 마지막 칸이 비어, 그 자체가 '미발표' 표시가 된다.
+    진행 중인 달을 이미 낸 회사는 그 달까지, 아직인 회사는 완결월까지 그린다.
+    빈 칸을 남기지 않고 축 자체를 카드마다 끊는다 -- 마지막 칸이 비어 있으면
+    자료가 없는 것처럼 읽히고, 축 길이가 6의 배수가 되면서 x축 라벨이 겹쳤다.
     """
-    by_code = {r["code"]: r for r in rows}
     pend_ym = (pend or {}).get("ym", "")
-    pend_vals = (pend or {}).get("vals", {})
-    axis = months_axis(ref_ym, n_months) + ([pend_ym] if pend_ym else [])
+    by_code = {r["code"]: r for r in with_pending(rows, pend)}
+    base_axis = months_axis(ref_ym, n_months)
+    axis_p = base_axis + ([pend_ym] if pend_ym else [])
     rendered, missing = [], []
 
     if stats is not None:
@@ -1763,7 +1798,7 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None,
             rec = by_code.get(c)
             if rec is None:
                 continue
-            for ym in axis:
+            for ym in axis_p:
                 if rec["rev"].get(shift_ym(ym, -12)) is not None:
                     continue
                 if rec["rev_ly"].get(ym) is not None:
@@ -1790,13 +1825,10 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None,
         body.append('<div class="grid3">')
         for c in present:
             rec = by_code[c]
-            pv = pend_vals.get(c) if pend_ym else None
-            if pv is not None:
-                # rec["rev"]는 완결월까지만 담는다. 진행월 값만 얹은 사본을
-                # 만들어 넘기면 YoY·MoM·QoQ가 전부 기존 함수 그대로 돈다.
-                rec = {**rec, "rev": {**rec["rev"], pend_ym: pv}}
-            hdr_i = len(axis) - 1 if pv is not None else len(axis) - 1 - bool(pend_ym)
-            n_pend_filed += pv is not None
+            filed = bool(pend_ym) and rec["rev"].get(pend_ym) is not None
+            axis = axis_p if filed else base_axis
+            skip = 0 if filed else int(bool(pend_ym))
+            n_pend_filed += filed
             body.append(
                 f'<figure class="cbox" data-code="{esc(c)}" '
                 f'title="클릭하면 월별 상세가 열립니다">'
@@ -1807,13 +1839,13 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None,
                    if rec.get("cap") else "")
                 + '</div>'
                 f'</figcaption>'
-                f'{chart_svg(rec, axis, hdr_i, pend_ym)}'
+                f'{chart_svg(rec, axis, skip, pend_ym)}'
                 f'<div class="cbiz">{esc(rec["biz"])}</div>'
                 f'</figure>')
         body.append('</div>')
 
     if stats is not None:
-        stats["chart_points"] = len(rendered) * len(axis)
+        stats["chart_points"] = len(rendered) * len(base_axis) + n_pend_filed
         stats["chart_stocks"] = len(rendered)
         stats["chart_missing"] = missing
 
@@ -1962,7 +1994,7 @@ def group_change(by_code: dict, members: list[str], ym: str, lag: int,
 
 def heat_table(by_code: dict, axis: list[str], ref_ym: str,
                lag: int, clip: float, window: int = 1,
-               hide_first: int = 0) -> str:
+               hide_first: int = 0, pend_ym: str = "") -> str:
     """One heatmap grid. (window, lag): (1,12) YoY / (1,1) MoM / (3,3) QoQ.
 
     All tabs share rows, row order, row labels and columns so that switching
@@ -1986,7 +2018,10 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
             txt = "0"                      # '+0' / '-0' 을 피한다
         else:
             txt = f"{v:+.0f}"
-        klass = "hc" + (" part" if d["n_lfl"] < d["n_pool"] else "") \
+        # 값이 없는 칸에는 일부합산 점을 찍지 않는다. 진행 중인 달은 아직
+        # 안 낸 부품군이 많아 빈 칸에 점만 남으면 무슨 뜻인지 알 수 없다.
+        part = v is not None and d["n_lfl"] < d["n_pool"]
+        klass = "hc" + (" part" if part else "") \
                      + (" " + sat if sat else "") \
                      + (" hide" if i < hide_first else "")
         tip = (f"부품군 {d['n_pool']}종목 중 {d['n_lfl']}종목 · "
@@ -2007,11 +2042,17 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
     out = ['<div class="hscroll"><table class="hm"><thead><tr>',
            '<th class="hl">부품군</th>']
     for i, ym in enumerate(axis):
-        last = i == len(axis) - 1
-        out.append(f'<th class="hmth{" refm" if last else ""}'
+        # 진행 중인 달이 맨 오른쪽에 오면 그 칸이 '기준월'이 아니다. 완결월은
+        # 여전히 ref_ym이고, 진행월은 따로 표시해 둔다 -- 아직 다 안 낸 달의
+        # 숫자를 완결월과 같은 무게로 읽으면 안 된다.
+        pm = bool(pend_ym) and ym == pend_ym
+        rm = ym == ref_ym
+        out.append(f'<th class="hmth{" refm" if rm else ""}'
+                   f'{" pendm" if pm else ""}'
                    f'{" hide" if i < hide_first else ""}">'
                    f'{ym[2:4]}/{ym[5:7]}'
-                   + ('<span class="rtag">기준월</span>' if last else "")
+                   + ('<span class="rtag">기준월</span>' if rm else "")
+                   + ('<span class="rtag">진행중</span>' if pm else "")
                    + '</th>')
     out.append("</tr></thead><tbody>")
 
@@ -2019,8 +2060,11 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
     # simply riding the cycle or actually outrunning it
     bench = bom_groups.benchmark_members()
     b_now = group_change(by_code, bench, ref_ym, lag, window)
+    # 행 라벨의 합계는 늘 완결월이다. 진행월은 아직 다 안 낸 달이라 그 합을
+    # 여기 쓰면 부품군 규모가 실제보다 작아 보인다. 그래서 달을 같이 적는다.
+    rl = f"({ref_ym[2:4]}/{ref_ym[5:7]})"
     out.append(row(f"부품군 {len(bom_groups.all_codes())} 합계",
-                   f"모자 제외 {len(bench)} · {mn(b_now['total_sum'])}",
+                   f"모자 제외 {len(bench)} · {mn(b_now['total_sum'])} {rl}",
                    bench, extra="bench", key=BENCH_KEY))
 
     for stage, gnames in bom_groups.STAGES.items():
@@ -2032,26 +2076,39 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
             members = bom_groups.heatmap_members(g)
             now = group_change(by_code, members, ref_ym, lag, window)
             small = now["total_sum"] < SMALL_GROUP_K
-            sub = f"{len(bom_groups.GROUPS[g])}종목 · {mn(now['total_sum'])}"
+            sub = f"{len(bom_groups.GROUPS[g])}종목 · {mn(now['total_sum'])} {rl}"
             out.append(row(g, sub, members, extra="tiny" if small else ""))
     out.append("</tbody></table></div>")
     return "".join(out)
 
 
-def render_heatmap(rows, ref_ym: str, n_months: int, sec=2, default_n: int = 24):
-    """n_months는 렌더하는 전체 열 수, default_n은 처음 보여줄 열 수.
+def render_heatmap(rows, ref_ym: str, n_months: int, sec=2, default_n: int = 24,
+                   pend=None):
+    """n_months는 완결월 열 수, default_n은 처음 보여줄 열 수.
 
     기간 버튼(12/24/전체)은 표를 다시 만들지 않고 앞쪽 열을 감추기만 한다.
     탭마다 표를 3벌 더 찍으면 마크업이 3배가 되고, 탭을 바꿀 때 기간이
     초기화되는 문제도 생긴다.
+
+    진행 중인 달이 있으면 맨 오른쪽에 한 열 더 붙는다. 그 달을 낸 종목만
+    like-for-like에 들어가므로 대부분의 칸이 '일부만 합산'이 되고, 점(·)과
+    툴팁이 몇 종목으로 계산했는지 그대로 보여준다.
     """
-    by_code = {r["code"]: r for r in rows}
-    axis = months_axis(ref_ym, n_months)
-    default_n = min(default_n, n_months)
+    pend_ym = (pend or {}).get("ym", "")
+    by_code = {r["code"]: r for r in with_pending(rows, pend)}
+    axis = months_axis(ref_ym, n_months) + ([pend_ym] if pend_ym else [])
+    n_cols = len(axis)
+    default_n = min(default_n, n_cols)
 
     common = ('· <b>부품군 이름을 누르면</b> 그 부품군의 매출·증감률 추이와 '
               '소속 종목이 열립니다 (← → 로 이웃 부품군 이동)'
-              '<br>· 부품군 합계는 모자 이중계상 제거 기준입니다'
+              + (f'<br>· <b>맨 오른쪽 {esc(pend_ym[2:4])}/{esc(pend_ym[5:7])}은 '
+                 '아직 신고 기간인 달</b>입니다. 그 달을 낸 종목만 합산되므로 '
+                 '거의 모든 칸에 일부합산 점(·)이 붙고, 마감이 다가올수록 값이 '
+                 '움직입니다. <b>완결월은 여전히 '
+                 f'{esc(ref_ym[2:4])}/{esc(ref_ym[5:7])}</b>이고 행 라벨의 '
+                 '합계도 그 달 기준입니다' if pend_ym else "")
+              + '<br>· 부품군 합계는 모자 이중계상 제거 기준입니다'
               '<br>· 일부만 합산된 셀은 하단에 작은 점(·)이 붙습니다'
               f'<br>· 합계 {SMALL_GROUP_K // 1000:,} 백만 미만 부품군'
               '(행 라벨이 어두운 행)은 한두 종목이 전체를 좌우합니다')
@@ -2094,10 +2151,10 @@ def render_heatmap(rows, ref_ym: str, n_months: int, sec=2, default_n: int = 24)
         '구조적으로 높게 나옵니다. <b>계절 패턴을 거스르는 칸이 실제 신호입니다.</b>'
         '</div>')
 
-    cut = n_months - default_n
+    cut = n_cols - default_n
 
     def per(n, label):
-        on = " on" if n == default_n or (n == 0 and default_n == n_months) else ""
+        on = " on" if n == default_n or (n == 0 and default_n == n_cols) else ""
         return f'<button class="tab per{on}" data-p="{n}">{label}</button>'
 
     return "\n".join([
@@ -2114,11 +2171,11 @@ def render_heatmap(rows, ref_ym: str, n_months: int, sec=2, default_n: int = 24)
         + per(12, "12개월") + per(24, "24개월") + per(0, "전체")
         + '</span></h2>',
         f'<div class="hmpane" data-pane="yoy">'
-        f'{heat_table(by_code, axis, ref_ym, 12, HEAT_CLIP, hide_first=cut)}</div>',
+        f'{heat_table(by_code, axis, ref_ym, 12, HEAT_CLIP, hide_first=cut, pend_ym=pend_ym)}</div>',
         f'<div class="hmpane" data-pane="mom" hidden>'
-        f'{heat_table(by_code, axis, ref_ym, 1, HEAT_CLIP_MOM, hide_first=cut)}</div>',
+        f'{heat_table(by_code, axis, ref_ym, 1, HEAT_CLIP_MOM, hide_first=cut, pend_ym=pend_ym)}</div>',
         f'<div class="hmpane" data-pane="qoq" hidden>'
-        f'{heat_table(by_code, axis, ref_ym, 3, HEAT_CLIP_QOQ, window=3, hide_first=cut)}</div>',
+        f'{heat_table(by_code, axis, ref_ym, 3, HEAT_CLIP_QOQ, window=3, hide_first=cut, pend_ym=pend_ym)}</div>',
         fn_yoy, fn_mom, fn_qoq,
     ])
 
@@ -2284,7 +2341,8 @@ def modal_payload(rows, codes: list[str], lo_ym: str, ref_ym: str,
     return payload, n
 
 
-def group_payload(rows, axis: list[str], ref_ym: str) -> tuple[str, int]:
+def group_payload(rows, axis: list[str], ref_ym: str,
+                  pend=None) -> tuple[str, int]:
     """부품군 시계열 + 소속 종목, JSON 한 덩이.
 
     ★ 숫자는 전부 heat_table이 쓰는 group_change/heatmap_members로 만든다.
@@ -2294,7 +2352,8 @@ def group_payload(rows, axis: list[str], ref_ym: str) -> tuple[str, int]:
     23그룹 + 벤치마크 1행 × 48개월 × 4계열이라 30KB 정도다. 표를 미리 그리는
     것보다 훨씬 싸고, 기간 버튼을 눌러도 다시 그릴 수 있다.
     """
-    by_code = {r["code"]: r for r in rows}
+    pend_ym = (pend or {}).get("ym", "")
+    by_code = {r["code"]: r for r in with_pending(rows, pend)}
     r1 = lambda v: None if v is None else round(v, 1)
 
     def block(members_all: list[str], members: list[str]) -> dict:
@@ -2318,10 +2377,18 @@ def group_payload(rows, axis: list[str], ref_ym: str) -> tuple[str, int]:
                 jo += rec["cap"][1]
             par = bom_groups.CONSOL_PARENT.get(c, "") if excl else ""
             prec = by_code.get(par)
+            # 종목마다 최신월이 다르다(진행월을 낸 곳은 그 달). 어느 달의
+            # 숫자인지 같이 실어야 표에서 6월과 7월이 섞여도 읽을 수 있다.
+            ym = (pend_ym if pend_ym and rec["rev"].get(pend_ym) is not None
+                  else ref_ym)
             mem.append({"c": c, "k": rec["name_kr"], "e": rec.get("name_en") or "",
-                        "cap": fmt_cap(rec.get("cap")), "r": rec["rev_now"],
-                        "m": r1(rec["mom"]), "y": r1(rec["yoy"]),
-                        "q": r1(qoq_3m(rec, ref_ym)),
+                        "cap": fmt_cap(rec.get("cap")), "r": rec["rev"].get(ym),
+                        "ym": f"{ym[2:4]}/{ym[5:7]}", "p": ym == pend_ym,
+                        "m": r1(pct(rec["rev"].get(ym),
+                                    rec["rev"].get(shift_ym(ym, -1)))),
+                        "y": r1(pct(rec["rev"].get(ym),
+                                    rec["rev"].get(shift_ym(ym, -12)))),
+                        "q": r1(qoq_3m(rec, ym)),
                         "x": par, "xk": (prec["name_kr"] if prec else "")})
         mem.sort(key=lambda x: (x["r"] is None, -(x["r"] or 0)))
         return {"n": len(members_all), "nh": len(members),
@@ -2345,7 +2412,11 @@ def group_payload(rows, axis: list[str], ref_ym: str) -> tuple[str, int]:
     j = lambda o: json.dumps(o, ensure_ascii=False, separators=(",", ":"))
     payload = (f"const GAXIS={j(axis)};\n"
                f"const GRP={j(out)};\n"
-               f"const GORDER={j(order)};\n")
+               f"const GORDER={j(order)};\n"
+               # 완결월 위치. 헤더의 '부품군 합계 매출'은 늘 이 달을 쓴다 --
+               # 진행월 합계는 아직 다 안 낸 값이라 규모로 읽으면 안 된다.
+               f"const GREF={j(axis.index(ref_ym))};\n"
+               f"const GPEND={j(pend_ym or '')};\n")
     return payload, len(order)
 
 
@@ -2542,10 +2613,13 @@ function drawLabels(svg, nMonths){
   if (!code || !SERIES[code] || sc.length < 7) return;
   var PL=sc[0], slot=sc[1], loY=sc[3], hiY=sc[4], zy=sc[5], half=sc[6];
   var s = SERIES[code];
-  // 차트 축은 SERIES의 마지막 달에서 끝난다. 진행 중인 달까지 그리도록
-  // 바뀌었고 SERIES도 그 달을 마지막 원소로 싣고 있어 그대로 맞는다.
-  var end = s.length - 1;
-  var start = end - nMonths + 1;
+  // 축이 카드마다 다르다. 진행월을 낸 카드는 SERIES 끝까지(skip 0), 아직인
+  // 카드는 한 칸 앞까지(skip 1). 공통 nMonths 하나로는 못 맞추므로 길이와
+  // skip을 카드가 직접 싣고 온다.
+  var n = sc.length > 7 ? sc[7] : nMonths;
+  var skip = sc.length > 8 ? sc[8] : 0;
+  var end = s.length - 1 - skip;
+  var start = end - n + 1;
   var yoy = [], mom = [];
   for (var i = start; i <= end; i++){
     yoy.push(lblPct(s[i], i>=12 ? s[i-12] : null));
@@ -2881,11 +2955,13 @@ function gcBar(g){
   }
   vals.forEach(function(v, i){
     if (v == null) return;
-    var h = ih*v/mx;
+    var h = ih*v/mx, ym = GAXIS[r[0]+i], pend = (ym === GPEND);
     o.push('<rect x="'+(PL+i*slot+slot*0.16).toFixed(1)+'" y="'+(H-PB-h).toFixed(1)
          + '" width="'+(slot*0.68).toFixed(1)+'" height="'+h.toFixed(1)
-         + '" fill="__C_BAR__" opacity="'+(i === n-1 ? 1 : 0.82)+'"><title>'
-         + GAXIS[r[0]+i] + '  ' + Math.round(v/1000).toLocaleString() + ' 백만 NTD</title></rect>');
+         + '" fill="__C_BAR__" opacity="'+(pend ? 0.5 : (ym === GAXIS[GREF] ? 1 : 0.82))
+         + '"><title>' + ym + '  ' + Math.round(v/1000).toLocaleString()
+         + ' 백만 NTD' + (pend ? '  ·  공시 진행 중 (발표분만 합산)' : '')
+         + '</title></rect>');
   });
   o.push(gcAxisX(r[0], PL, slot, H-PB+21, n));
   return o.join('');
@@ -2962,7 +3038,8 @@ function gcPoly(seg, col){
 }
 function gcTable(g){
   var o = ['<table class="gmtab"><thead><tr><th class="l">코드</th>',
-           '<th class="l">한글명</th><th class="l">시가총액</th><th>당월매출</th>',
+           '<th class="l">한글명</th><th class="l">시가총액</th>',
+           '<th class="l">최신월</th><th>매출</th>',
            '<th>MoM%</th><th>YoY%</th><th>QoQ%</th></tr></thead><tbody>'];
   g.mem.forEach(function(m){
     o.push('<tr data-code="'+m.c+'"'+(m.x ? ' class="excl"' : '')+'>'
@@ -2971,6 +3048,7 @@ function gcTable(g){
       + (m.x ? '<span class="exnote">합산 제외 &mdash; '+m.x+' '+m.xk+'에 연결</span>' : '')
       + '</td>'
       + '<td class="l cap">'+(m.cap||'')+'</td>'
+      + '<td class="l mym'+(m.p ? ' pendym' : '')+'">'+m.ym+'</td>'
       + '<td class="rev">'+_mn(m.r)+'</td>'
       + '<td class="'+_cls(m.m)+'">'+gpc(m.m)+'</td>'
       + '<td class="'+_cls(m.y)+'">'+gpc(m.y)+'</td>'
@@ -2985,11 +3063,11 @@ function gmRender(){
   var b = document.getElementById('gmBack'), r = gmRange();
   b.querySelector('.gmname').textContent = g.nm;
   b.querySelector('.gmstage').textContent = g.st;
-  var last = g.sum[GAXIS.length-1];
+  // 규모는 완결월(GREF)로 적는다. 진행월 합계는 아직 다 안 낸 값이다.
   b.querySelector('.gmfacts').innerHTML =
       '<b>' + g.n + '</b>종목' + (g.nh !== g.n ? ' (합산 ' + g.nh + ')' : '')
     + ' &nbsp;·&nbsp; 시총 <b>' + (g.cap || '&mdash;') + '</b>'
-    + ' &nbsp;·&nbsp; ' + GAXIS[GAXIS.length-1] + ' 매출 <b>' + _mn(last) + '</b> 백만 NTD';
+    + ' &nbsp;·&nbsp; ' + GAXIS[GREF] + ' 매출 <b>' + _mn(g.sum[GREF]) + '</b> 백만 NTD';
   document.getElementById('gmPos').textContent =
       (GORDER.indexOf(GM.key)+1) + ' / ' + GORDER.length;
   document.getElementById('gmBarSub').textContent =
@@ -2999,7 +3077,8 @@ function gmRender(){
       'YoY 12개월 전 대비 / MoM 전월 대비 / QoQ 3개월 합 대비 · '
     + '클리핑 없는 실제값 · 점선이 0%';
   document.getElementById('gmMemSub').textContent =
-      GAXIS[GAXIS.length-1] + ' 기준 · 행을 누르면 그 종목 월별 상세';
+      '각 종목의 최신월 기준 (' + (GPEND ? GPEND + ' 발표분은 노랑, 나머지는 '
+      + GAXIS[GREF] : GAXIS[GREF]) + ') · 행을 누르면 그 종목 월별 상세';
   document.getElementById('gcBar').innerHTML = gcBar(g);
   document.getElementById('gcLine').innerHTML = gcLine(g);
   document.getElementById('gmTab').innerHTML = gcTable(g);
@@ -3113,7 +3192,7 @@ def render(rows, prows, ref_ym, pending, stats, meta) -> str:
 {render_timeline(rows, meta["pend"], ref_ym, meta["mc"], sec=1)}
 {render_charts(rows, ref_ym, meta["n_months"], stats, sec=2, pend=meta["pend"])}
 {render_heatmap(rows, ref_ym, meta["heat_months"], sec=3,
-                default_n=meta["heat_default"])}
+                default_n=meta["heat_default"], pend=meta["pend"])}
 {render_inflection(rows, ref_ym, sec=4)}
 {render_pending(pending, prows, ref_ym, it_total, n=5, rows=rows)}
 {render_table(rows, ref_ym, n=6, clickable=meta["table_clickable"], pend=meta["pend"], mc=meta["mc"])}
@@ -3142,7 +3221,7 @@ wire('tTLU');
 wireModal(); wireLineToggles(); wireHeatTabs(); wireTimeline(1.0);
 wireNumToggle({meta["n_months"] + (1 if meta["pend"] else 0)});
 wireJumps(); wireGroupModal();
-wireHeatPeriod({meta["heat_months"]}, {meta["heat_default"]});
+wireHeatPeriod({meta["heat_months"] + (1 if meta["pend"] else 0)}, {meta["heat_default"]});
 wireFilters({{table:'tAll', q:'q', ind:'fInd', mkt:'fMkt', bom:'fBom',
              small:'fSmall', bomOnly:'fBomOnly', unfiled:'fUnfiled',
              cap:'fCap', capFloorJo:1.0, count:'cnt',
@@ -3283,9 +3362,11 @@ def main(argv=None) -> int:
           f"{len(payload.encode('utf-8')):,} bytes of JSON, "
           f"발표일 {sum(len(v) for v in disc_all.values())}건")
 
-    gpay, n_grp = group_payload(rows, months_axis(ref_ym, heat_months), ref_ym)
-    print(f"  group payload              : {n_grp} rows x {heat_months} months, "
-          f"{len(gpay.encode('utf-8')):,} bytes of JSON")
+    gaxis = months_axis(ref_ym, heat_months) + ([pend_ym] if pend_ym else [])
+    gpay, n_grp = group_payload(rows, gaxis, ref_ym, pend=pend)
+    print(f"  group payload              : {n_grp} rows x {len(gaxis)} months "
+          f"(완결 {heat_months}" + (f" + 진행 {pend_ym}" if pend_ym else "")
+          + f"), {len(gpay.encode('utf-8')):,} bytes of JSON")
     payload = payload + gpay
 
     html_out = render(rows, prows, ref_ym, pending, stats,
