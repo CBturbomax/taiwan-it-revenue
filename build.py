@@ -688,14 +688,25 @@ svg.ch .cmax {{ fill:var(--a2); }}
    exist before this f-string is evaluated */
 svg.ch .cmom {{ fill:{ACCENT}; }}    /* 헤더 숫자를 선 색과 맞춘다 */
 svg.ch .cyoy {{ fill:{ACCENT3}; }}
+svg.ch .cqoq {{ fill:#7FD1A4; }}
+svg.ch .csep {{ fill:var(--mute); font-weight:400; }}
+body.hide-yoy svg.ch .yoyline, body.hide-yoy svg.ch .yoydot {{ display:none; }}
 body.hide-mom svg.ch .momline, body.hide-mom svg.ch .momdot {{ display:none; }}
+body.hide-qoq svg.ch .qoqline, body.hide-qoq svg.ch .qoqdot {{ display:none; }}
 .momtog {{ font-size:18px; margin-bottom:6px; }}
+.momtog .sw {{
+  display:inline-block; width:16px; height:4px; border-radius:2px; margin:0 2px 0 4px;
+}}
 .hintw {{ font-size:16px; color:var(--mute); }}
 
 /* month labels -- grid stays three columns whether they are on or off */
 svg.ch .lbl {{ display:none; }}
 body.show-nums svg.ch .lbl {{ display:block; }}
-body.show-nums.hide-mom svg.ch .lbl.momlbl {{ display:none; }}
+/* 꺼진 선의 숫자는 켜도 나오지 않는다 */
+body.hide-yoy svg.ch .lbl.yoylbl,
+body.hide-mom svg.ch .lbl.momlbl,
+body.hide-qoq svg.ch .lbl.qoqlbl {{ display:none; }}
+svg.ch .lbl.qoqlbl .lbt {{ fill:#7FD1A4; }}
 svg.ch .lbg {{ fill:rgba(10,15,20,.82); rx:1.2; }}
 /* 색은 반드시 CSS로 준다. SVG의 fill 표현 속성은 `svg.ch text {{fill:...}}`
    보다 우선순위가 낮아, JS로 fill 속성을 걸면 전부 흰색으로 덮인다. */
@@ -810,20 +821,31 @@ details.unf summary {{ cursor:pointer; font-size:19px; color:#c9d6e0; }}
 details.unf summary b {{ color:var(--a3); }}
 details.unf .scroll {{ margin-top:12px; max-height:420px; }}
 
-/* --- section 4 heatmap --- */
-.hscroll {{ overflow-x:auto; border:1px solid var(--line); border-radius:10px; }}
+/* --- section 3 heatmap: 엑셀식 틀고정 ---------------------------------------
+   세로/가로 양쪽으로 스크롤되는 상자를 만들고, 날짜 헤더는 위에, 부품군 이름은
+   왼쪽에 고정한다. sticky 셀은 배경이 투명하면 뒤 행이 그대로 비쳐 지나가므로
+   전부 명시적 배경색을 준다. z-index 층: 모서리 6 > 열헤더 5 > 행헤더/단계 4. */
+.hscroll {{
+  max-height:680px; overflow:auto;
+  border:1px solid var(--line); border-radius:10px;
+}}
 table.hm {{ border-collapse:separate; border-spacing:0; font-variant-numeric:tabular-nums; }}
 table.hm th.hl {{
-  position:sticky; left:0; z-index:3; background:#1b232b;
+  position:sticky; left:0; z-index:4; background:#1a222b;
   min-width:250px; max-width:250px; text-align:left; padding:9px 12px;
-  font-size:19px; font-weight:700; cursor:default; border-bottom:1px solid var(--line);
+  font-size:19px; font-weight:700; cursor:default;
+  border-bottom:1px solid var(--line); border-right:2px solid #2b3742;
 }}
-table.hm thead th.hl {{ z-index:4; }}
+/* 좌상단 모서리 -- 양방향 고정이라 가장 위에 있어야 한다 */
+table.hm thead th.hl {{
+  top:0; z-index:6; background:#1a222b;
+  border-bottom:2px solid #2b3742;
+}}
 table.hm .hsub {{ display:block; font-size:15px; font-weight:400; color:var(--mute); }}
 table.hm th.hmth {{
-  position:sticky; top:0; z-index:2; background:#1b232b; color:#dce7ef;
+  position:sticky; top:0; z-index:5; background:#1a222b; color:#dce7ef;
   font-size:15px; font-weight:600; padding:8px 4px; min-width:42px;
-  text-align:center; cursor:default; border-bottom:2px solid var(--line);
+  text-align:center; cursor:default; border-bottom:2px solid #2b3742;
 }}
 /* the newest column is the complete month everything else is anchored to */
 table.hm th.hmth.refm {{
@@ -845,10 +867,14 @@ table.hm td.hc.part::after {{
   content:""; position:absolute; bottom:2px; left:50%; transform:translateX(-50%);
   width:3px; height:3px; border-radius:50%; background:rgba(255,255,255,.75);
 }}
+/* 단계 구분 행: 셀이 표 전체 폭이라 그대로 두면 라벨이 왼쪽으로 흘러 나간다.
+   글자만 따로 왼쪽에 고정한다. */
 table.hm tr.stg td {{
   background:#1a2129; color:var(--a1); font-size:17px; font-weight:700;
   padding:7px 12px; letter-spacing:1px;
-  position:sticky; left:0;
+}}
+table.hm tr.stg .stgl {{
+  position:sticky; left:12px; z-index:4; display:inline-block;
 }}
 table.hm tr.bench th.hl {{ background:#233040; color:var(--a1); }}
 table.hm tr.tiny th.hl {{ background:#151b21; color:#8b9aa6; }}
@@ -999,7 +1025,7 @@ def th(label, cls_="", hint=""):
     return f'<th{c}{t}>{esc(label)}<span class="ar">&#9650;&#9660;</span></th>'
 
 
-def render_pending(pending, prows, ref_ym, it_total, n=1):
+def render_pending(pending, prows, ref_ym, it_total, n=1, rows=None):
     if not pending:
         return (f'<h2><span class="n">{n}</span>조기공시분</h2>'
                 '<div class="note">현재 진행 중인 공시월이 없습니다. '
@@ -1029,10 +1055,14 @@ def render_pending(pending, prows, ref_ym, it_total, n=1):
         parts.append(th("코드", "l pin") + th("종목명", "l") + th("업종", "l")
                      + th("부품군", "l")
                      + th("당월매출", "", "백만 NTD") + th("MoM%") + th("YoY%")
+                     + th("QoQ%", "", "최근3개월 합 / 직전3개월 합 - 1")
                      + th("사업", "l"))
         parts.append("</tr></thead><tbody>")
+        by_code = {x["code"]: x for x in (rows or [])}
         for r in prows:
             g = r["bom_group"] or ""
+            rec = by_code.get(r["code"])
+            qq = (qoq_pending(rec, r["ym"], r["rev_month_k"]) if rec else None)
             parts.append(
                 f'<tr>'
                 f'<td class="l pin code" data-v="{esc(r["code"])}">{esc(r["code"])}</td>'
@@ -1043,10 +1073,26 @@ def render_pending(pending, prows, ref_ym, it_total, n=1):
                 f'<td class="rev" data-v="{r["rev_month_k"]}">{mn(r["rev_month_k"])}</td>'
                 f'<td class="{cls(r["mom"])}" data-v="{sort_key(r["mom"])}">{pc(r["mom"])}</td>'
                 f'<td class="{cls(r["yoy"])}" data-v="{sort_key(r["yoy"])}">{pc(r["yoy"])}</td>'
+                f'<td class="{cls(qq)}" data-v="{sort_key(qq)}">{pc(qq)}</td>'
                 f'<td class="l biz" data-v="{esc(r["biz"])}">{esc(r["biz"])}</td>'
                 f'</tr>')
         parts.append("</tbody></table></div>")
     return "\n".join(parts)
+
+
+def qoq_pending(rec: dict, pend_ym: str, pend_val):
+    """진행 중인 달 기준 3개월 합 QoQ.
+
+    rec["rev"]는 완결월까지만 담고 있어 진행 중인 달 값은 별도로 받아 끼운다.
+    나머지 규칙은 _window_sum과 같다 -- 6개월 중 하나라도 비면 None.
+    """
+    def get(ym):
+        return pend_val if ym == pend_ym else rec["rev"].get(ym)
+    cur = [get(shift_ym(pend_ym, -i)) for i in range(3)]
+    prv = [get(shift_ym(pend_ym, -3 - i)) for i in range(3)]
+    if any(v is None for v in cur + prv):
+        return None
+    return pct(sum(cur), sum(prv))
 
 
 def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
@@ -1108,6 +1154,7 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
         + th("부품군", "l") + th("시가총액", "l", "종가 x 보통주 발행주식수")
         + th("당월매출", "", "백만 NTD")
         + th("MoM%") + th("YoY%")
+        + th("QoQ%", "", "최근3개월 합 / 직전3개월 합 - 1")
         + '</tr></thead><tbody>']
 
     for r in filed:
@@ -1116,6 +1163,7 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
         shown = f"{ts[5:10]} {ts[11:16]}" if ts else "&mdash;"
         mom = pct(vals[r["code"]], r["rev"].get(shift_ym(ym, -1)))
         yoy = pct(vals[r["code"]], r["rev"].get(shift_ym(ym, -12)))
+        qq = qoq_pending(r, ym, vals[r["code"]])
         parts.append(
             f'<tr data-bom="{esc(g)}" '
             f'data-cap="{(r["cap"] or [0, 0])[1]:.4f}"'
@@ -1129,6 +1177,7 @@ def render_timeline(rows, pend, ref_ym, mc=None, sec=1):
             f'<td class="rev" data-v="{vals[r["code"]]}">{mn(vals[r["code"]])}</td>'
             f'<td class="{cls(mom)}" data-v="{sort_key(mom)}">{pc(mom)}</td>'
             f'<td class="{cls(yoy)}" data-v="{sort_key(yoy)}">{pc(yoy)}</td>'
+            f'<td class="{cls(qq)}" data-v="{sort_key(qq)}">{pc(qq)}</td>'
             f'</tr>')
     parts.append("</tbody></table></div>")
 
@@ -1345,7 +1394,9 @@ PT, PB = 62, 246               # plot top / bottom (above PT sits the label row)
 BAR_FILL = ACCENT2             # #5B9BD5 bars    = monthly revenue
 LINE_COL = ACCENT3             # #ED7D31 line    = YoY%
 MOM_COL = ACCENT               # #FFCB05 line    = MoM%
-MOM_CLIP = 60.0                # MoM 스케일은 ±60%에서 클리핑
+# 팔레트 밖의 연한 초록. 파랑(막대)·주황(YoY)·노랑(MoM) 어느 것과도 겹치지 않는다.
+QOQ_COL = "#7FD1A4"            # 3개월 합 QoQ%
+MOM_CLIP = 60.0                # MoM/QoQ 스케일은 ±60%에서 클리핑
 MOM_SPAN = 0.40                # ±MOM_CLIP 이 플롯 높이의 이 비율만큼 차지
 
 # 월별 숫자 라벨을 어디서 만들 것인가. --label-mode 로 바뀐다.
@@ -1368,6 +1419,9 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
     revs = [rec["rev"].get(ym) for ym in axis]
     yoys = [yoy_at(rec, ym) for ym in axis]
     moms = [pct(rec["rev"].get(ym), rec["rev"].get(shift_ym(ym, -1))) for ym in axis]
+    # 히트맵 QoQ 탭·변곡 점검과 같은 공식. _window_sum 하나만 쓴다.
+    qoqs = [pct(_window_sum(rec, ym, 3), _window_sum(rec, shift_ym(ym, -3), 3))
+            for ym in axis]
 
     vals = [v for v in revs if v is not None]
     rev_max = max(vals) if vals else 0
@@ -1429,12 +1483,13 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
     if len(seg) > 1:
         segs.append(seg)
     for s in segs:
-        out.append(f'<polyline points="{" ".join(s)}" fill="none" '
+        out.append(f'<polyline class="yoyline" points="{" ".join(s)}" fill="none" '
                    f'stroke="{LINE_COL}" stroke-width="2.4" '
                    f'stroke-linejoin="round" stroke-linecap="round"/>')
     if segs:
         lx, ly = segs[-1][-1].split(",")
-        out.append(f'<circle cx="{lx}" cy="{ly}" r="3.6" fill="{LINE_COL}"/>')
+        out.append(f'<circle class="yoydot" cx="{lx}" cy="{ly}" r="3.6" '
+                   f'fill="{LINE_COL}"/>')
 
     # MoM line. It shares the YoY zero line so both read against one baseline,
     # but gets its own fixed ±MOM_CLIP scale: MoM swings ±50% every month while
@@ -1448,42 +1503,45 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
         c = max(-MOM_CLIP, min(MOM_CLIP, v))
         return max(PT + 1, min(PB - 1, zy - (c / MOM_CLIP) * half))
 
-    mseg, msegs, mdots = [], [], []
-    for i, v in enumerate(moms):
-        if v is None:
-            if len(mseg) > 1:
-                msegs.append(mseg)
-            mseg = []
-            continue
-        x = PL + i * slot + slot / 2
-        y = mom_y(v)
-        mseg.append(f"{x:.1f},{y:.1f}")
-        if abs(v) > MOM_CLIP:
-            mdots.append((x, y, v))
-    if len(mseg) > 1:
-        msegs.append(mseg)
-    for s in msegs:
-        out.append(f'<polyline class="momline" points="{" ".join(s)}" fill="none" '
-                   f'stroke="{MOM_COL}" stroke-width="1.4" opacity="0.75" '
-                   f'stroke-linejoin="round"/>')
-    for x, y, v in mdots:
-        out.append(f'<circle class="momdot" cx="{x:.1f}" cy="{y:.1f}" r="2.6" '
-                   f'fill="{MOM_COL}" opacity="0.9">'
-                   f'<title>MoM {v:+,.1f}% (±{MOM_CLIP:.0f}% 초과, 선은 클리핑)</title>'
-                   f'</circle>')
+    def sub_line(vals, cls, colour, width, opacity, label):
+        """MoM/QoQ처럼 zero선을 공유하는 보조선. 끊긴 구간은 선을 나눈다."""
+        seg2, segs2, dots2 = [], [], []
+        for i, v in enumerate(vals):
+            if v is None:
+                if len(seg2) > 1:
+                    segs2.append(seg2)
+                seg2 = []
+                continue
+            x = PL + i * slot + slot / 2
+            y = mom_y(v)
+            seg2.append(f"{x:.1f},{y:.1f}")
+            if abs(v) > MOM_CLIP:
+                dots2.append((x, y, v))
+        if len(seg2) > 1:
+            segs2.append(seg2)
+        for s in segs2:
+            out.append(f'<polyline class="{cls}line" points="{" ".join(s)}" '
+                       f'fill="none" stroke="{colour}" stroke-width="{width}" '
+                       f'opacity="{opacity}" stroke-linejoin="round"/>')
+        for x, y, v in dots2:
+            out.append(f'<circle class="{cls}dot" cx="{x:.1f}" cy="{y:.1f}" r="2.6" '
+                       f'fill="{colour}" opacity="0.9">'
+                       f'<title>{label} {v:+,.1f}% '
+                       f'(±{MOM_CLIP:.0f}% 초과, 선은 클리핑)</title></circle>')
+
+    sub_line(moms, "mom", MOM_COL, 1.4, 0.75, "MoM")
+    sub_line(qoqs, "qoq", QOQ_COL, 1.8, 0.9, "QoQ")
 
     # label row: max revenue on the left, this month's MoM / YoY on the right
     mom, yoy = rec.get("mom"), rec.get("yoy")
     out.append(f'<text x="{PL}" y="30" class="cl cmax">{mn(rev_max)}</text>')
     out.append(f'<text x="{PL}" y="50" class="cs">최대 · 백만 NTD</text>')
-    # values wear their line's colour so the header maps onto the chart at a
-    # glance; the sign is still readable from the +/- prefix
-    out.append(f'<text x="{PR}" y="30" class="cl" text-anchor="end">'
-               f'<tspan class="cmom">{pc(mom) or "-"}</tspan>'
-               f'<tspan class="csep"> / </tspan>'
-               f'<tspan class="cyoy">{pc(yoy) or "-"}</tspan></text>')
-    out.append(f'<text x="{PR}" y="50" class="cs" text-anchor="end">'
-               f'MoM% / YoY%</text>')
+    # 켜진 선의 숫자만 보여야 하는데, 구분자까지 함께 사라져야 해서 tspan을
+    # CSS로 숨기는 방식으로는 " / +67.9" 같은 꼴이 남는다. 값은 data-hdr에
+    # 실어두고 토글할 때 JS가 통째로 다시 그린다. 서버는 기본 상태로 그린다.
+    qoq = qoqs[-1] if qoqs else None
+    out.append(f'<text x="{PR}" y="30" class="cl chdr" text-anchor="end"></text>')
+    out.append(f'<text x="{PR}" y="50" class="cs chlbl" text-anchor="end"></text>')
 
     # sparse month ticks
     step = 6
@@ -1508,12 +1566,14 @@ def chart_svg(rec: dict, axis: list[str]) -> str:
 
     out.append("</svg>")
     svg = "".join(out)
+    hdr = "|".join("" if v is None else f"{v:+,.1f}" for v in (mom, yoy, qoq))
+    extra = f' data-hdr="{hdr}"'
     if LABEL_MODE == "js":
         # JS가 파이썬과 똑같은 축을 재현하도록 스케일 파라미터를 실어 보낸다.
         # 축 계산을 JS에 복제하면 선과 라벨이 어긋나기 시작한다.
         sc = f"{PL:.1f},{slot:.4f},{rev_max},{lo:.4f},{hi:.4f},{zy:.2f},{half:.2f}"
-        svg = svg.replace('<svg viewBox', f'<svg data-sc="{sc}" viewBox', 1)
-    return svg
+        extra += f' data-sc="{sc}"'
+    return svg.replace("<svg viewBox", f"<svg{extra} viewBox", 1)
 
 
 def label_group(cls: str, vals, y_of, slot: float, color: str,
@@ -1625,9 +1685,15 @@ def render_charts(rows, ref_ym: str, n_months: int, stats: dict | None = None, s
             f'{n_months}개월</span>'
             f'<span class="info" tabindex="0">&#9432;<span class="tip">{tip}</span></span>'
             f'</h2>',
+            # MoM은 계절성이 커서 평소엔 꺼둔다. 필요할 때만 켠다.
             '<div class="thinbar">'
-            '<label class="chk momtog"><input type="checkbox" id="momToggle" checked>'
-            'MoM 선 표시</label>'
+            f'<label class="chk momtog"><input type="checkbox" id="tgYoy" checked>'
+            f'<span class="sw" style="background:{LINE_COL}"></span>YoY</label>'
+            f'<label class="chk momtog"><input type="checkbox" id="tgMom">'
+            f'<span class="sw" style="background:{MOM_COL}"></span>MoM</label>'
+            f'<label class="chk momtog"><input type="checkbox" id="tgQoq" checked>'
+            f'<span class="sw" style="background:{QOQ_COL}"></span>QoQ</label>'
+            '<span class="hintw">|</span>'
             '<label class="chk momtog"><input type="checkbox" id="numToggle">'
             '숫자 표시</label>'
             '</div>']
@@ -1780,7 +1846,7 @@ def heat_table(by_code: dict, axis: list[str], ref_ym: str,
 
     for stage, gnames in bom_groups.STAGES.items():
         out.append(f'<tr class="stg"><td colspan="{len(axis) + 1}">'
-                   f'{esc(stage)}</td></tr>')
+                   f'<span class="stgl">{esc(stage)}</span></td></tr>')
         for g in gnames:
             if g not in bom_groups.GROUPS:
                 continue
@@ -2196,12 +2262,6 @@ function wireModal(){
     });
   });
 }
-function wireMomToggle(){
-  var cb = document.getElementById('momToggle');
-  if (!cb) return;
-  function run(){ document.body.classList.toggle('hide-mom', !cb.checked); }
-  cb.addEventListener('change', run); run();
-}
 // Month labels. Drawn on demand from SERIES (already shipped for the modal) plus
 // the per-chart scale in data-sc, so the axes match the Python-drawn lines
 // exactly instead of being re-derived and drifting.
@@ -2259,9 +2319,74 @@ function drawLabels(svg, nMonths){
     });
     return g;
   }
-  svg.appendChild(group(yoy, yLine, '', -1));
+  var qoq = [];
+  for (var j = start; j <= end; j++){
+    var a = wsum3(s, j), b = wsum3(s, j-3);
+    qoq.push((a==null||b==null||b<=0) ? null : (a/b-1)*100);
+  }
+  svg.appendChild(group(yoy, yLine, ' yoylbl', -1));
   svg.appendChild(group(mom, yMom, ' momlbl', 1));
+  svg.appendChild(group(qoq, yMom, ' qoqlbl', 1));
   svg.dataset.lbl = '1';
+}
+// 3개월 합. 파이썬 _window_sum과 같은 규칙(한 달이라도 비면 null).
+function wsum3(s, i){
+  if (i < 2) return null;
+  var t = 0;
+  for (var k = 0; k < 3; k++){
+    if (s[i-k] == null) return null;
+    t += s[i-k];
+  }
+  return t;
+}
+// 헤더 숫자는 켜진 선만 보여야 하고 구분자도 같이 사라져야 해서 통째로 다시 그린다.
+var NSX = 'http://www.w3.org/2000/svg';
+function renderHeaders(){
+  var on = {
+    mom: !document.body.classList.contains('hide-mom'),
+    yoy: !document.body.classList.contains('hide-yoy'),
+    qoq: !document.body.classList.contains('hide-qoq')
+  };
+  document.querySelectorAll('svg.ch[data-hdr]').forEach(function(svg){
+    var v = svg.dataset.hdr.split('|');            // mom | yoy | qoq
+    var val = svg.querySelector('.chdr'), lab = svg.querySelector('.chlbl');
+    if (!val || !lab) return;
+    while (val.firstChild) val.removeChild(val.firstChild);
+    var order = [['mom', v[0], 'cmom', 'MoM'], ['yoy', v[1], 'cyoy', 'YoY'],
+                 ['qoq', v[2], 'cqoq', 'QoQ']];
+    var names = [], first = true;
+    order.forEach(function(o){
+      if (!on[o[0]]) return;
+      if (!first){
+        var sep = document.createElementNS(NSX, 'tspan');
+        sep.setAttribute('class', 'csep'); sep.textContent = ' / ';
+        val.appendChild(sep);
+      }
+      var t = document.createElementNS(NSX, 'tspan');
+      t.setAttribute('class', o[2]); t.textContent = o[1] || '-';
+      val.appendChild(t);
+      names.push(o[3] + '%');
+      first = false;
+    });
+    lab.textContent = names.join(' / ');
+  });
+}
+function wireLineToggles(){
+  var map = {tgYoy: 'hide-yoy', tgMom: 'hide-mom', tgQoq: 'hide-qoq'};
+  var boxes = [];
+  Object.keys(map).forEach(function(id){
+    var cb = document.getElementById(id);
+    if (cb) boxes.push([cb, map[id]]);
+  });
+  if (!boxes.length) return;
+  function run(){
+    boxes.forEach(function(b){
+      document.body.classList.toggle(b[1], !b[0].checked);
+    });
+    renderHeaders();
+  }
+  boxes.forEach(function(b){ b[0].addEventListener('change', run); });
+  run();
 }
 function wireNumToggle(nMonths){
   var cb = document.getElementById('numToggle');
@@ -2386,7 +2511,7 @@ def render(rows, prows, ref_ym, pending, stats, meta) -> str:
 {render_charts(rows, ref_ym, meta["n_months"], stats, sec=2)}
 {render_heatmap(rows, ref_ym, meta["heat_months"], sec=3)}
 {render_inflection(rows, ref_ym, sec=4)}
-{render_pending(pending, prows, ref_ym, it_total, n=5)}
+{render_pending(pending, prows, ref_ym, it_total, n=5, rows=rows)}
 {render_table(rows, ref_ym, n=6, clickable=meta["table_clickable"], pend=meta["pend"], mc=meta["mc"])}
 {render_movers(rows, ref_ym, sec=7)}
 {MODAL_HTML}
@@ -2408,7 +2533,7 @@ YoY·MoM·누계YoY는 build 시점에 원본 절대금액에서 매번 재계�
 wire('tAll'); wire('tPend');
 wire('tTL');
 wire('tTLU');
-wireModal(); wireMomToggle(); wireHeatTabs(); wireTimeline(1.0);
+wireModal(); wireLineToggles(); wireHeatTabs(); wireTimeline(1.0);
 wireNumToggle({meta["n_months"]});
 wireFilters({{table:'tAll', q:'q', ind:'fInd', mkt:'fMkt', bom:'fBom',
              small:'fSmall', bomOnly:'fBomOnly', unfiled:'fUnfiled',
