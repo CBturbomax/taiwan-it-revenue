@@ -3394,5 +3394,25 @@ def main(argv=None) -> int:
     return 0
 
 
+def _inject():
+    """빌드된 dashboard.html에 계절성 차트를 끼워 넣는다."""
+    p = os.path.join(HERE, "seasonality-inline.js")
+    if not os.path.exists(p):
+        print("  seasonality addon: seasonality-inline.js 없음, 건너뜀")
+        return
+    with open(p, encoding="utf-8") as fh:
+        js = fh.read()
+    with open(OUT_PATH, encoding="utf-8") as fh:
+        h = fh.read()
+    if "sz-wrap" in h:
+        return
+    h = h.replace("</body>", "<script>" + js + "</script></body>", 1)
+    with open(OUT_PATH, "w", encoding="utf-8") as fh:
+        fh.write(h)
+    print(f"  seasonality addon: 주입 완료 (+{len(js):,} bytes)")
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    _rc = main()
+    _inject()
+    sys.exit(_rc)
