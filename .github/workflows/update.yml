@@ -15,10 +15,13 @@ name: update dashboard
 # 날짜 필드를 갈라놔야 1~10일에 두 스케줄이 겹치지 않는다.
 on:
   schedule:
-    - cron: "0 0-12 1-10 * *"
+    # 1~9일   UTC 00~12시 매시간 = 대만 08~20시
+    - cron: "0 0-12 1-9 * *"
+    # 10일    UTC 00~16시 15분 간격 = 대만 08시~자정 (마감일 폭주 대응)
+    - cron: "*/15 0-16 10 * *"
+    # 11일~   UTC 02/06/10/14시 = 대만 10/14/18/22시
     - cron: "0 2,6,10,14 11-31 * *"
   workflow_dispatch:        # Actions 탭에서 수동 실행 버튼
-
 permissions:
   contents: write           # gh-pages 브랜치에 push
   actions: write            # 오래된 캐시 정리
