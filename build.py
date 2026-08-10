@@ -61,7 +61,7 @@ OUT_PATH = os.path.join(HERE, "dashboard.html")
 # A month is treated as complete once it holds at least this share of the
 # busiest month's row count. Filings are due by the 10th, so the month being
 # filed sits far below the line and never contaminates the body of the report.
-COMPLETE_RATIO = 0.7
+COMPLETE_RATIO = 0.95
 
 # 빌드 시각은 항상 한국시간으로 찍는다.
 # 실행 환경의 로컬 시간을 쓰면 서버(UTC)와 이 PC(KST)의 표기가 9시간 어긋나,
